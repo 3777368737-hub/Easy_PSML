@@ -47,7 +47,7 @@ npm ci
 
 ## Run
 
-Use the desktop `GradPilot 控制台` shortcut, or run:
+Run the GradPilot control center:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-GradPilot.ps1
@@ -120,4 +120,5 @@ with `NEXT_PUBLIC_API_BASE_URL` pointing at the backend's public HTTPS URL.
 
 ## License
 
-This repository is private and proprietary. See `LICENSE`.
+This repository is public and source-available under a proprietary license.
+See `LICENSE`.
