@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: gradpilot-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
+      - key: APP_CORS_ORIGINS
+        sync: false
+      - key: DATABASE_PATH
+        value: /var/data/gradpilot.db
+    disk:
+      name: gradpilot-data
+      mountPath: /var/data
+      sizeGB: 1

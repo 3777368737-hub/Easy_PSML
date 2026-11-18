@@ -1,0 +1,34 @@
+# Node / Next
+**/node_modules/
+**/.next/
+**/.turbo/
+**/*.tsbuildinfo
+npm-debug.log*
+
+# Python / virtualenv
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+
+# Application data
+backend/data/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Local launcher state and logs
+.gradpilot-runtime.json
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
