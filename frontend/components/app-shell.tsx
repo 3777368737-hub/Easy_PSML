@@ -90,7 +90,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <div className="app-content">
         <header className="workspace-header">
           <div className="breadcrumb">
-            我的工作空间 <span>/</span> {" "}
+            我的工作空间 <span>/</span>{" "}
             <strong>{current < 0 ? "申请概览" : steps[current].title}</strong>
           </div>
           <span className="header-tag">
