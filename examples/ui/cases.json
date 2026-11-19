@@ -1,0 +1,22 @@
+{
+  "note": "Fictional examples for testing; not actual applicants or official program requirements.",
+  "cases": [
+    {
+      "id": "A_data_science",
+      "profile": {"full_name": "林晨（虚构测试）", "current_university": "Example University", "major": "Applied Mathematics", "target_degree": "Master's", "target_field": "Data Science", "target_country": "Hong Kong", "project_experience": "课程项目：清洗公开交通数据，比较回归模型，完成可复现报告。"},
+      "program": {"school_name": "Example University", "program_name": "MSc Data Science", "essay_type": "Personal Statement", "word_limit": 800, "prompt_text": "Explain your motivation for studying data science, your preparation, a relevant project, and your future goals.", "program_details": "Fictional test program emphasizing statistical modeling and reproducible projects."},
+      "story_notes": ["对交通数据分析感兴趣，希望从数学理论走向真实数据建模。", "负责缺失值处理、模型比较和实验记录；未记录量化提升，不应编造数字。", "希望从事数据分析工作，并在研究生阶段加强统计学习基础。"]
+    },
+    {
+      "id": "B_management",
+      "profile": {"full_name": "周宁（虚构测试）", "current_university": "Example University", "major": "Business Analytics", "target_degree": "Master's", "target_field": "Management", "target_country": "United Kingdom", "internship_experience": "实习期间整理客户反馈，归纳需求并协助改进内部报表。"},
+      "program": {"school_name": "Example Business School", "program_name": "MSc Management", "essay_type": "Motivation Letter", "word_limit": 500, "prompt_text": "Describe why you wish to study management, how your experience has prepared you, and what you hope to contribute.", "program_details": "Fictional test program emphasizing teamwork, decision-making and organizational behavior."},
+      "story_notes": ["希望理解团队如何把客户需求转为可执行决策。", "整理反馈并与同事讨论分类规则，协助更新内部报表。", "计划从事产品或运营工作，希望加强跨团队协作能力。"]
+    }
+  ],
+  "failure_cases": [
+    {"id": "empty_profile", "action": "Submit the background form with all text fields empty.", "expected": "Display required-field errors and focus the name field; no submission."},
+    {"id": "backend_offline", "action": "Enter case B, stop the local backend, then submit.", "expected": "Display a readable connection error and retain the entered values."},
+    {"id": "invalid_resume", "action": "Choose an unsupported extension or a file over 10 MB, then parse.", "expected": "Reject the file with a readable message before model processing; to verify locally."}
+  ]
+}
