@@ -1,32 +1,17 @@
-﻿import './globals.css';
-import Link from 'next/link';
-import type { ReactNode } from 'react';
-import StorageMigration from '@/lib/storage-migration';
-
+import "./globals.css";
+import type { ReactNode } from "react";
+import StorageMigration from "@/lib/storage-migration";
+import AppShell from "@/components/app-shell";
 export const metadata = {
-  title: 'GradPilot',
-  description: '基于 DeepSeek 的研究生申请文书助手',
+  title: "GradPilot | 你的申请文书工作台",
+  description: "从真实经历出发，整理背景、分析项目、挖掘故事，完成申请文书。",
 };
-
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
       <body>
         <StorageMigration />
-        <header className="topbar">
-          <div className="container topbar-inner">
-            <Link href="/" className="brand">
-              GradPilot
-            </Link>
-            <nav className="nav">
-              <Link href="/profile">背景信息</Link>
-              <Link href="/program">项目分析</Link>
-              <Link href="/story">故事挖掘</Link>
-              <Link href="/result">生成结果</Link>
-            </nav>
-          </div>
-        </header>
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
