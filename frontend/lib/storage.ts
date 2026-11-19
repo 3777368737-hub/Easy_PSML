@@ -6,6 +6,9 @@ export const STORAGE_KEYS = {
   storySession: "gradpilot_story_session",
   resultSnapshot: "gradpilot_result_snapshot",
   legacyHistory: "gradpilot_history",
+  batchForm: "gradpilot_batch_form",
+  batchSubmission: "gradpilot_batch_submission",
+  batchId: "gradpilot_batch_id",
 } as const;
 
 export function saveState(key: string, value: unknown): boolean {
@@ -53,4 +56,6 @@ export function clearDownstreamState(): void {
   removeState(STORAGE_KEYS.programForm);
   removeState(STORAGE_KEYS.storySession);
   removeState(STORAGE_KEYS.resultSnapshot);
+  removeState(STORAGE_KEYS.batchForm);
+  removeState(STORAGE_KEYS.batchSubmission);
 }

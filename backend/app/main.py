@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 from fastapi import (
@@ -23,6 +24,8 @@ from app.config import get_settings
 from app.errors import AppError, InputError
 from app.rate_limit import model_rate_limiter
 from app.schemas import (
+    BatchCreateRequest,
+    BatchResponse,
     DeleteHistoryResponse,
     DraftRequest,
     DraftResponse,
@@ -41,6 +44,7 @@ from app.schemas import (
     StoryStartRequest,
 )
 from app.services.resume_parser import extract_resume_text
+from app.services.batch import create_batch, retry_batch, start_worker, stop_worker
 from app.services.store import get_store
 from app.services.workflow import (
     analyze_program,
@@ -55,7 +59,18 @@ from app.services.workflow import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-app = FastAPI(title="GradPilot Backend", version="1.1.0")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await start_worker()
+    try:
+        yield
+    finally:
+        await stop_worker()
+
+
+app = FastAPI(title="GradPilot Backend", version="1.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -315,6 +330,37 @@ async def history(
     owner_id: str = Depends(get_owner_id),
 ) -> List[HistoryItem]:
     return get_store().list_history(owner_id)
+
+
+@app.post("/api/batches", response_model=BatchResponse, status_code=202)
+async def batch_create(
+    request: BatchCreateRequest,
+    owner_id: str = Depends(get_owner_id),
+) -> BatchResponse:
+    return create_batch(owner_id, request)
+
+
+@app.get("/api/batches", response_model=List[BatchResponse])
+async def batch_list(
+    owner_id: str = Depends(get_owner_id),
+) -> List[BatchResponse]:
+    return get_store().list_batches(owner_id)
+
+
+@app.get("/api/batches/{batch_id}", response_model=BatchResponse)
+async def batch_snapshot(
+    batch_id: str,
+    owner_id: str = Depends(get_owner_id),
+) -> BatchResponse:
+    return get_store().batch_snapshot(batch_id, owner_id)
+
+
+@app.post("/api/batches/{batch_id}/retry", response_model=BatchResponse, status_code=202)
+async def batch_retry(
+    batch_id: str,
+    owner_id: str = Depends(get_owner_id),
+) -> BatchResponse:
+    return retry_batch(owner_id, batch_id)
 
 
 @app.delete("/api/history", response_model=DeleteHistoryResponse)

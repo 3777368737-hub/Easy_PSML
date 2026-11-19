@@ -294,3 +294,63 @@ class HealthResponse(BaseModel):
     ok: bool
     database: Literal["ok"]
     version: str
+
+
+class BatchEssayRequest(BaseModel):
+    essay_type: Literal["Personal Statement", "Motivation Letter"]
+    word_limit: int = Field(default=800, ge=100, le=5000)
+    prompt_text: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=10, max_length=20000)
+    ]
+
+
+class BatchDirectionRequest(BaseModel):
+    school_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    program_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    program_details: str = Field(default="", max_length=30000)
+    essays: List[BatchEssayRequest] = Field(min_length=1, max_length=2)
+
+    @field_validator("program_details")
+    @classmethod
+    def clean_details(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("essays")
+    @classmethod
+    def unique_essay_types(cls, value: List[BatchEssayRequest]) -> List[BatchEssayRequest]:
+        if len({essay.essay_type for essay in value}) != len(value):
+            raise ValueError("Each direction must have unique essay types")
+        return value
+
+
+class BatchCreateRequest(BaseModel):
+    profile_id: Identifier
+    request_id: Identifier
+    tone: Literal["balanced", "authentic", "academic", "concise"] = "balanced"
+    directions: List[BatchDirectionRequest] = Field(min_length=1, max_length=5)
+
+
+class BatchItemResponse(BaseModel):
+    id: Identifier
+    direction_index: int = Field(ge=0, le=4)
+    program: ProgramContext
+    status: Literal["pending", "running", "completed", "failed"]
+    stage: Literal["pending", "analysis", "outline", "draft", "completed", "failed"]
+    session_id: Optional[Identifier] = None
+    draft: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class BatchResponse(BaseModel):
+    id: Identifier
+    profile_id: Identifier
+    tone: Literal["balanced", "authentic", "academic", "concise"]
+    status: Literal["pending", "running", "completed", "partial_failed", "failed"]
+    created_at: str
+    updated_at: str
+    items: List[BatchItemResponse]

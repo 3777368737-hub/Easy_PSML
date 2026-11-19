@@ -139,6 +139,12 @@ export default function ProgramPage() {
           <div className="kicker">FIND YOUR FIT</div>
           <h1 className="section-title">找到你与项目的连接。</h1>
           <p className="muted">把项目要求和文书题目，转成具体的写作策略。</p>
+          <p className="muted">
+            申请多个方向？
+            <Link className="text-link" href="/batch">
+              复用当前背景，批量生成 PS 与 ML
+            </Link>
+          </p>
         </div>
         <div className="program-layout">
           <div className="card">

@@ -36,8 +36,9 @@ const steps: {
   },
 ];
 export default function AppShell({ children }: { children: ReactNode }) {
-  const pathname = usePathname().replace(/\/$/, "") || "/";
+  const pathname = usePathname()?.replace(/\/$/, "") || "/";
   const current = steps.findIndex((step) => step.href === pathname);
+  const isBatch = pathname === "/batch";
   return (
     <div className="app-shell">
       <a href="#main-content" className="skip-link">
@@ -74,6 +75,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <span className="nav-index">0{i + 1}</span>
             </Link>
           ))}
+          <Link
+            href="/batch"
+            className={`nav-item ${isBatch ? "active" : ""}`}
+            aria-current={isBatch ? "page" : undefined}
+          >
+            <Icon name="file" />
+            <span>批量生成</span>
+            <span className="nav-index">PS/ML</span>
+          </Link>
         </nav>
         <div className="sidebar-note">
           <Icon name="spark" />
@@ -91,7 +101,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <header className="workspace-header">
           <div className="breadcrumb">
             我的工作空间 <span>/</span>{" "}
-            <strong>{current < 0 ? "申请概览" : steps[current].title}</strong>
+            <strong>
+              {isBatch ? "批量生成" : current < 0 ? "申请概览" : steps[current].title}
+            </strong>
           </div>
           <span className="header-tag">
             <Icon name="spark" size={16} /> AI 文书助手

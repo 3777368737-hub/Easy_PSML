@@ -69,6 +69,9 @@ export default function HomePage() {
               <Link href="/profile" className="btn light">
                 开始整理背景
               </Link>
+              <Link href="/batch" className="btn-secondary">
+                多方向批量生成
+              </Link>
               <a href="#workflow" className="hero-link">
                 了解写作流程
               </a>

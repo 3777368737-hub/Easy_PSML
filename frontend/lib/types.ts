@@ -169,3 +169,48 @@ export type StorySessionState = {
   round_no: number;
   status: 'interviewing' | 'ready';
 };
+
+export type EssayType = 'Personal Statement' | 'Motivation Letter';
+export type BatchTone = 'balanced' | 'authentic' | 'academic' | 'concise';
+
+export type BatchEssayInput = {
+  essay_type: EssayType;
+  word_limit: number;
+  prompt_text: string;
+};
+
+export type BatchDirectionInput = {
+  school_name: string;
+  program_name: string;
+  program_details: string;
+  essays: BatchEssayInput[];
+};
+
+export type BatchRequest = {
+  profile_id: string;
+  request_id: string;
+  tone: BatchTone;
+  directions: BatchDirectionInput[];
+};
+
+export type BatchItem = {
+  id: string;
+  direction_index: number;
+  program: ProgramContext;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  stage: 'pending' | 'analysis' | 'outline' | 'draft' | 'completed' | 'failed';
+  session_id: string | null;
+  draft: string | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export type BatchResponse = {
+  id: string;
+  profile_id: string;
+  tone: BatchTone;
+  status: 'pending' | 'running' | 'completed' | 'partial_failed' | 'failed';
+  created_at: string;
+  updated_at: string;
+  items: BatchItem[];
+};

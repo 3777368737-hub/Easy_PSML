@@ -118,6 +118,22 @@ with `NEXT_PUBLIC_API_BASE_URL` pointing at the backend's public HTTPS URL.
 - GPA, graduation year, language score, motivation, career goal, and program
   website notes are optional.
 
+## Batch Generation
+
+After saving a profile, choose “继续：批量生成” or open `/batch`. Add up to five
+school/program directions and select PS, ML, or both for each direction. Each
+essay has its own prompt and word limit. One submission generates independent
+Chinese outlines and English drafts, with progress, failed-item retry, TXT
+downloads, a combined Markdown download, and links to the existing revision flow.
+
+Batch generation uses the supplied profile directly and skips the interview.
+Jobs persist in SQLite and continue after the page closes; unfinished work is
+recovered when the backend restarts. Run a single backend process (no multiple
+Uvicorn workers) for the current in-process queue. Each client can have one
+active batch; model limits are checked for each generation stage.
+
+See [the step-by-step implementation and rationale](docs/batch-generation.md).
+
 ## License
 
 This repository is public and source-available under a proprietary license.

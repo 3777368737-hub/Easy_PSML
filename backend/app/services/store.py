@@ -13,6 +13,9 @@ from app.config import get_settings
 from app.errors import ConflictError, NotFoundError
 from app.schemas import (
     ArtifactVersion,
+    BatchCreateRequest,
+    BatchItemResponse,
+    BatchResponse,
     DraftReview,
     EssayOutline,
     HistoryItem,
@@ -164,12 +167,262 @@ class SQLiteStore:
 
                 CREATE INDEX IF NOT EXISTS idx_artifacts_owner_session
                 ON artifacts(owner_id, session_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS batches (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    tone TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_id, request_id),
+                    FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_batches_owner_updated
+                ON batches(owner_id, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS batch_items (
+                    id TEXT PRIMARY KEY,
+                    batch_id TEXT NOT NULL,
+                    direction_index INTEGER NOT NULL,
+                    item_index INTEGER NOT NULL,
+                    program_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    analysis_id TEXT,
+                    session_id TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    FOREIGN KEY(batch_id) REFERENCES batches(id) ON DELETE CASCADE,
+                    FOREIGN KEY(analysis_id) REFERENCES analyses(id) ON DELETE SET NULL,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE SET NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_batch_items_batch
+                ON batch_items(batch_id, item_index);
                 """
             )
 
     def healthcheck(self) -> None:
         with self._connection() as connection:
             connection.execute("SELECT 1").fetchone()
+
+    def create_batch(self, owner_id: str, request: BatchCreateRequest) -> BatchResponse:
+        self.require_profile(request.profile_id, owner_id)
+        batch_id = str(uuid.uuid4())
+        now = _now()
+        request_json = _dump(request)
+        with self._connection() as connection:
+            # Claim the idempotency key and insert every item in one transaction.
+            # INSERT OR IGNORE also handles two simultaneous submissions safely.
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO batches(
+                    id, owner_id, profile_id, request_id, request_json,
+                    tone, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (batch_id, owner_id, request.profile_id, request.request_id,
+                 request_json, request.tone, now, now),
+            ).rowcount
+            if not inserted:
+                existing = connection.execute(
+                    "SELECT id, request_json FROM batches WHERE owner_id = ? AND request_id = ?",
+                    (owner_id, request.request_id),
+                ).fetchone()
+                if existing["request_json"] != request_json:
+                    raise ConflictError("This request_id already belongs to a different batch request")
+                batch_id = existing["id"]
+            else:
+                active_count = connection.execute(
+                    "SELECT COUNT(*) AS count FROM batches WHERE owner_id = ? "
+                    "AND status IN ('pending', 'running')",
+                    (owner_id,),
+                ).fetchone()["count"]
+                if active_count > 1:
+                    raise ConflictError("Wait for your active batch to finish before starting another")
+                item_index = 0
+                for direction_index, direction in enumerate(request.directions):
+                    for essay in direction.essays:
+                        program = ProgramContext(
+                            school_name=direction.school_name,
+                            program_name=direction.program_name,
+                            program_details=direction.program_details,
+                            essay_type=essay.essay_type,
+                            word_limit=essay.word_limit,
+                            prompt_text=essay.prompt_text,
+                        )
+                        connection.execute(
+                            """
+                            INSERT INTO batch_items(
+                                id, batch_id, direction_index, item_index,
+                                program_json, status, stage
+                            ) VALUES (?, ?, ?, ?, ?, 'pending', 'pending')
+                            """,
+                            (str(uuid.uuid4()), batch_id, direction_index,
+                             item_index, _dump(program)),
+                        )
+                        item_index += 1
+        return self.batch_snapshot(batch_id, owner_id)
+
+    def get_batch(self, batch_id: str, owner_id: str) -> Optional[BatchResponse]:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM batches WHERE id = ? AND owner_id = ?",
+                (batch_id, owner_id),
+            ).fetchone()
+            if row is None:
+                return None
+            items = connection.execute(
+                """
+                SELECT i.*, s.draft FROM batch_items i
+                LEFT JOIN sessions s ON s.id = i.session_id AND s.owner_id = ?
+                WHERE i.batch_id = ? ORDER BY i.item_index
+                """,
+                (owner_id, batch_id),
+            ).fetchall()
+        return BatchResponse(
+            id=row["id"], profile_id=row["profile_id"], tone=row["tone"],
+            status=row["status"], created_at=row["created_at"], updated_at=row["updated_at"],
+            items=[BatchItemResponse(
+                id=item["id"], direction_index=item["direction_index"],
+                program=ProgramContext.model_validate_json(item["program_json"]),
+                status=item["status"], stage=item["stage"],
+                session_id=item["session_id"], draft=item["draft"],
+                error_code=item["error_code"], error_message=item["error_message"],
+            ) for item in items],
+        )
+
+    def require_batch(self, batch_id: str, owner_id: str) -> BatchResponse:
+        batch = self.get_batch(batch_id, owner_id)
+        if batch is None:
+            raise NotFoundError("Batch not found")
+        return batch
+
+    def batch_snapshot(self, batch_id: str, owner_id: str) -> BatchResponse:
+        return self.require_batch(batch_id, owner_id)
+
+    def list_batches(self, owner_id: str) -> List[BatchResponse]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id FROM batches WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100",
+                (owner_id,),
+            ).fetchall()
+        return [batch for row in rows if (batch := self.get_batch(row["id"], owner_id))]
+
+    def claim_batch(self, batch_id: str, owner_id: str) -> bool:
+        with self._connection() as connection:
+            return bool(connection.execute(
+                "UPDATE batches SET status = 'running', updated_at = ? "
+                "WHERE id = ? AND owner_id = ? AND status = 'pending'",
+                (_now(), batch_id, owner_id),
+            ).rowcount)
+
+    def pending_batches(self) -> List[tuple[str, str]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id, owner_id FROM batches WHERE status = 'pending' ORDER BY created_at LIMIT 100"
+            ).fetchall()
+        return [(row["id"], row["owner_id"]) for row in rows]
+
+    def batch_item_state(self, batch_id: str, item_id: str, owner_id: str) -> Dict[str, Any]:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT i.* FROM batch_items i JOIN batches b ON b.id = i.batch_id "
+                "WHERE i.batch_id = ? AND i.id = ? AND b.owner_id = ?",
+                (batch_id, item_id, owner_id),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("Batch item not found")
+        return dict(row)
+
+    def update_batch_item(
+        self, batch_id: str, item_id: str, owner_id: str, **changes: Any
+    ) -> None:
+        allowed = {"status", "stage", "analysis_id", "session_id", "error_code", "error_message"}
+        if not changes or not set(changes) <= allowed:
+            raise ValueError("Invalid batch item update")
+        with self._connection() as connection:
+            assignments = ", ".join(f"{key} = ?" for key in changes)
+            updated = connection.execute(
+                f"UPDATE batch_items SET {assignments} WHERE id = ? AND batch_id = ? "
+                "AND EXISTS(SELECT 1 FROM batches WHERE id = ? AND owner_id = ?)",
+                (*changes.values(), item_id, batch_id, batch_id, owner_id),
+            ).rowcount
+            if not updated:
+                raise NotFoundError("Batch item not found")
+            connection.execute(
+                "UPDATE batches SET updated_at = ? WHERE id = ? AND owner_id = ?",
+                (_now(), batch_id, owner_id),
+            )
+
+    def finish_batch(self, batch_id: str, owner_id: str) -> None:
+        with self._connection() as connection:
+            counts = connection.execute(
+                "SELECT i.status, COUNT(*) AS count FROM batch_items i "
+                "JOIN batches b ON b.id = i.batch_id "
+                "WHERE b.id = ? AND b.owner_id = ? GROUP BY i.status",
+                (batch_id, owner_id),
+            ).fetchall()
+            statuses = {row["status"]: row["count"] for row in counts}
+            if not statuses:
+                return
+            if statuses.get("pending") or statuses.get("running"):
+                status = "pending"
+            elif statuses.get("failed"):
+                status = "partial_failed" if statuses.get("completed") else "failed"
+            else:
+                status = "completed"
+            connection.execute(
+                "UPDATE batches SET status = ?, updated_at = ? WHERE id = ? AND owner_id = ?",
+                (status, _now(), batch_id, owner_id),
+            )
+
+    def retry_batch(self, batch_id: str, owner_id: str) -> BatchResponse:
+        with self._connection() as connection:
+            # Serialize the active-batch check with create/retry submissions.
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM batches WHERE id = ? AND owner_id = ?",
+                (batch_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("Batch not found")
+            if row["status"] not in {"partial_failed", "failed"}:
+                raise ConflictError("Only a batch with failed items can be retried")
+            active = connection.execute(
+                "SELECT 1 FROM batches WHERE owner_id = ? AND status IN ('pending', 'running') LIMIT 1",
+                (owner_id,),
+            ).fetchone()
+            if active is not None:
+                raise ConflictError("Wait for your active batch to finish before retrying another")
+            connection.execute(
+                "UPDATE batch_items SET status = 'pending', stage = 'pending', "
+                "error_code = NULL, error_message = NULL WHERE batch_id = ? AND status = 'failed'",
+                (batch_id,),
+            )
+            connection.execute(
+                "UPDATE batches SET status = 'pending', updated_at = ? WHERE id = ? AND owner_id = ?",
+                (_now(), batch_id, owner_id),
+            )
+        return self.batch_snapshot(batch_id, owner_id)
+
+    def recover_batches(self) -> None:
+        # This MVP has one backend process and one worker. Persisted checkpoints
+        # make an interrupted model stage safe to resume on the next startup.
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE batch_items SET status = 'pending' WHERE status = 'running' "
+                "AND batch_id IN (SELECT id FROM batches WHERE status = 'running')"
+            )
+            connection.execute(
+                "UPDATE batches SET status = 'pending', updated_at = ? WHERE status = 'running'",
+                (_now(),),
+            )
 
     def save_profile(self, owner_id: str, profile: ProfileData) -> ProfileRecord:
         profile_id = str(uuid.uuid4())
@@ -528,7 +781,7 @@ class SQLiteStore:
             profile = ProfileData.model_validate_json(row["profile_json"])
             program = ProgramContext.model_validate_json(row["program_json"])
             label = " - ".join(
-                part for part in (program.school_name, program.program_name) if part
+                part for part in (program.school_name, program.program_name, program.essay_type) if part
             )
             draft = row["draft"]
             preview = " ".join((draft or "").split())[:180]

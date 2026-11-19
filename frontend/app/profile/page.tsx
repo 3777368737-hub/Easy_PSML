@@ -261,6 +261,11 @@ export default function ProfilePage() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    const destination =
+      (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") ===
+      "batch"
+        ? "/batch"
+        : "/program";
     const fileError = file ? validateFile(file) : "";
     if (fileError) {
       setError(fileError);
@@ -287,7 +292,7 @@ export default function ProfilePage() {
       clearDownstreamState();
       saveState(STORAGE_KEYS.profile, result);
       removeState(STORAGE_KEYS.profileDraft);
-      router.push("/program");
+      router.push(destination);
     } catch (err) {
       setError(readableError(err, "提交背景信息失败"));
     } finally {
@@ -640,6 +645,14 @@ export default function ProfilePage() {
                   }}
                 >
                   保存表单草稿
+                </button>
+                <button
+                  className="btn-secondary"
+                  type="submit"
+                  value="batch"
+                  disabled={loading || parsingResume}
+                >
+                  {loading ? "正在生成申请画像..." : "继续：批量生成"}
                 </button>
                 <button
                   className="btn"

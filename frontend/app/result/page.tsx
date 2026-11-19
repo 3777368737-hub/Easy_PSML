@@ -220,6 +220,9 @@ export default function ResultPage() {
       removeState(STORAGE_KEYS.profileDraft);
       removeState(STORAGE_KEYS.analysis);
       removeState(STORAGE_KEYS.programForm);
+      removeState(STORAGE_KEYS.batchForm);
+      removeState(STORAGE_KEYS.batchSubmission);
+      removeState(STORAGE_KEYS.batchId);
     } catch (err) {
       setError(readableError(err, "清空历史失败"));
     } finally {
