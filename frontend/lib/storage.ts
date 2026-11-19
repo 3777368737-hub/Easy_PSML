@@ -1,14 +1,15 @@
 export const STORAGE_KEYS = {
-  profile: 'gradpilot_profile',
-  programForm: 'gradpilot_program_form',
-  analysis: 'gradpilot_analysis',
-  storySession: 'gradpilot_story_session',
-  resultSnapshot: 'gradpilot_result_snapshot',
-  legacyHistory: 'gradpilot_history',
+  profileDraft: "gradpilot_profile_draft",
+  profile: "gradpilot_profile",
+  programForm: "gradpilot_program_form",
+  analysis: "gradpilot_analysis",
+  storySession: "gradpilot_story_session",
+  resultSnapshot: "gradpilot_result_snapshot",
+  legacyHistory: "gradpilot_history",
 } as const;
 
 export function saveState(key: string, value: unknown): boolean {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === "undefined") return false;
   try {
     localStorage.setItem(key, JSON.stringify(value));
     return true;
@@ -18,7 +19,7 @@ export function saveState(key: string, value: unknown): boolean {
 }
 
 export function loadState<T>(key: string): T | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === "undefined") return null;
   let raw: string | null;
   try {
     raw = localStorage.getItem(key);
@@ -39,7 +40,7 @@ export function loadState<T>(key: string): T | null {
 }
 
 export function removeState(key: string): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   try {
     localStorage.removeItem(key);
   } catch {
