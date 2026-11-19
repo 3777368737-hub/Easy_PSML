@@ -28,18 +28,18 @@ const highlights = ['简历解析自动回填', '引入个性化追问环节', '
 const features = [
   {
     icon: '01',
-    title: '不是“一键生成”，而是先搭叙事骨架',
+    title: '先分析项目，再搭叙事骨架',
     desc: '先完成背景结构化，再做项目匹配和故事提炼，避免“词很漂亮但逻辑空心”的文书问题。',
   },
   {
     icon: '02',
-    title: '不是泛化提问，而是围绕你的目标追问',
+    title: '围绕你的目标追问',
     desc: '问题会围绕你的经历与项目要求动态展开，持续提炼“动机-行动-结果”的可写素材。',
   },
   {
     icon: '03',
-    title: '不是一次性产出，而是支持可控迭代',
-    desc: '先看中文大纲确认方向，再生成英文草稿；不满意可直接给修改意见快速重写。',
+    title: '多方向批量生成，逐篇继续打磨',
+    desc: '一份个人背景可生成多个方向的 PS 和 ML，每篇保留中文大纲和英文草稿，支持下载与修改重写。',
   },
 ];
 
@@ -68,6 +68,7 @@ export default function HomePage() {
               <Link href="/profile" className="btn">
                 立即开始
               </Link>
+              <Link href="/batch" className="btn-secondary">多方向批量生成</Link>
             </div>
           </div>
 

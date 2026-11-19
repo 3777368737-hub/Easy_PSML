@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, readableError } from '@/lib/api';
@@ -128,6 +129,7 @@ export default function ProgramPage() {
           <div className="kicker">第 2 步</div>
           <h1 className="section-title">分析目标项目</h1>
           <p className="muted">把项目要求和文书题目转成可执行的写作策略。</p>
+          <p className="muted">申请多个方向？<Link href="/batch">复用当前背景，批量生成 PS 与 ML →</Link></p>
           {!profile ? <p className="notice" role="alert">请先完成背景信息页。</p> : null}
           {error ? <p className="notice" role="alert">{error}</p> : null}
 

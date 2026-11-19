@@ -91,6 +91,7 @@ button {
   display: flex;
   gap: 16px;
   color: var(--muted);
+  flex-wrap: wrap;
 }
 
 .hero {
@@ -248,7 +249,28 @@ textarea {
   justify-content: flex-end;
   gap: 12px;
   margin-top: 20px;
+  flex-wrap: wrap;
 }
+
+.batch-stack { display: grid; gap: 20px; }
+.batch-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.batch-direction { border: 1px solid var(--line); border-radius: 16px; padding: 20px; min-width: 0; }
+.batch-direction > legend { color: var(--primary-dark); font-weight: 700; padding: 0 8px; }
+.batch-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.batch-heading .actions { margin-top: 0; }
+.batch-heading h3 { margin: 0; overflow-wrap: anywhere; }
+.batch-heading p { margin: 8px 0 16px; }
+.batch-profile { border-left: 3px solid var(--primary); padding: 10px 14px; background: #f5f7fd; }
+.batch-profile a { color: var(--primary-dark); font-weight: 600; }
+.batch-essay { padding: 16px; background: #f7f9ff; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.batch-checkbox { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.batch-checkbox input { width: 18px; height: 18px; min-height: 0; flex-shrink: 0; }
+.batch-progress { width: 100%; height: 12px; accent-color: var(--primary); margin: 12px 0; }
+.batch-output { border: 1px solid var(--line); padding: 20px; border-radius: 16px; min-width: 0; }
+.batch-output summary { cursor: pointer; color: var(--primary-dark); font-weight: 600; }
+.batch-draft { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.85; margin-top: 16px; }
+.batch-status-completed { background: #e9f8f0; color: var(--success); }
+.batch-status-failed { background: #fff0ee; color: #a62a22; }
 
 .badge {
   display: inline-flex;

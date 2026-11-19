@@ -21,6 +21,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <nav className="nav">
               <Link href="/profile">背景信息</Link>
               <Link href="/program">项目分析</Link>
+              <Link href="/batch">批量生成</Link>
               <Link href="/story">故事挖掘</Link>
               <Link href="/result">生成结果</Link>
             </nav>
