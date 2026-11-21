@@ -136,13 +136,20 @@ export default function ProgramPage() {
     <main className="section">
       <div className="container">
         <div className="page-intro">
-          <div className="kicker">FIND YOUR FIT</div>
-          <h1 className="section-title">找到你与项目的连接。</h1>
-          <p className="muted">把项目要求和文书题目，转成具体的写作策略。</p>
+          <div className="kicker">QUICK PROJECT REVIEW</div>
+          <h1 className="section-title">分析一个目标项目。</h1>
           <p className="muted">
-            申请多个方向？
+            粘贴学校要求，快速得到写作策略。需要同时管理多个项目、故事和 PS /
+            ML 时，请使用申请项目页。
+          </p>
+          <p className="muted">
+            已经有完整背景？
             <Link className="text-link" href="/batch">
-              复用当前背景，批量生成 PS 与 ML
+              直接批量生成
+            </Link>
+            {" · "}
+            <Link className="text-link" href="/library">
+              打开申请项目
             </Link>
           </p>
         </div>

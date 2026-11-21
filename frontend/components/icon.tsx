@@ -9,7 +9,14 @@ export type IconName =
   | "spark"
   | "check"
   | "upload"
-  | "book";
+  | "book"
+  | "menu"
+  | "close"
+  | "arrow-right"
+  | "plus"
+  | "layers"
+  | "clock"
+  | "folder";
 const paths: Record<IconName, string> = {
   compass:
     "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M16 8l-2.5 5.5L8 16l2.5-5.5L16 8Z",
@@ -22,6 +29,13 @@ const paths: Record<IconName, string> = {
   check: "m5 12 4 4L19 6",
   upload: "M12 16V3 M7 8l5-5 5 5 M4 16v5h16v-5",
   book: "M12 5v16 M3 3l9 2 9-2v16l-9 2-9-2V3Z",
+  menu: "M4 7h16 M4 12h16 M4 17h16",
+  close: "M6 6l12 12 M18 6 6 18",
+  "arrow-right": "M5 12h14 M13 6l6 6-6 6",
+  plus: "M12 5v14 M5 12h14",
+  layers: "m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5",
+  clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7v5l3 2",
+  folder: "M3 6h7l2 2h9v11H3V6Z",
 };
 export default function Icon({
   name,

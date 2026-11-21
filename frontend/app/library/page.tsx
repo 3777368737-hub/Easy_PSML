@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Icon from "@/components/icon";
 import { apiBlobFetch, apiFetch, readableError } from "@/lib/api";
 import { loadState, saveState, STORAGE_KEYS } from "@/lib/storage";
 import type {
@@ -819,10 +821,10 @@ export default function WorkbenchPage() {
       <div className="container workbench-stack">
         <section className="workbench-heading">
           <div>
-            <div className="kicker">ASSEMBLY WORKBENCH</div>
-            <h1 className="section-title">装配工作台</h1>
+            <div className="kicker">APPLICATION PROJECTS</div>
+            <h1 className="section-title">申请项目与文书装配</h1>
             <p className="muted">
-              将人物背景、申请项目和已挖掘故事拖入同一棵链路。系统会校验背景与项目归属，禁止跨链路装配。
+              先选择一份背景，再管理学校项目与故事，最后生成对应的 PS / ML。系统会校验素材归属，避免跨项目混用。
             </p>
           </div>
           <div className="actions">
@@ -840,6 +842,32 @@ export default function WorkbenchPage() {
         {error ? <p className="notice" role="alert">{error}</p> : null}
         {notice ? <p className="notice success" role="status">{notice}</p> : null}
 
+        {!backgrounds.length ? (
+          <section className="workbench-onboarding">
+            <div>
+              <p className="eyebrow">FIRST APPLICATION</p>
+              <h2>从一份背景资料开始</h2>
+              <p>
+                背景是学校项目、故事和文书的共同来源。建立后，你可以在同一页完成项目绑定、故事访谈和文书生成。
+              </p>
+              <div className="workbench-onboarding-steps">
+                <span>
+                  <strong>01</strong> 建立背景
+                </span>
+                <span>
+                  <strong>02</strong> 添加学校项目
+                </span>
+                <span>
+                  <strong>03</strong> 生成文书
+                </span>
+              </div>
+            </div>
+            <Link className="btn" href="/profile">
+              整理第一份背景
+              <Icon name="arrow-right" size={17} />
+            </Link>
+          </section>
+        ) : (
         <section className="workbench-source-grid">
           <article className="card workbench-source-table">
             <div className="workbench-table-title">
@@ -1210,6 +1238,7 @@ export default function WorkbenchPage() {
             ) : null}
           </article>
         </section>
+        )}
 
         <section
           className={`card assembly-canvas ${
@@ -1224,10 +1253,10 @@ export default function WorkbenchPage() {
         >
           <div className="batch-heading">
             <div>
-              <div className="kicker">ASSEMBLY GRAPH</div>
-              <h2 className="section-title">装配链路</h2>
+              <div className="kicker">PROJECT ASSEMBLY</div>
+              <h2 className="section-title">当前项目的文书结构</h2>
               <p className="muted">
-                拖入一份人物背景作为根节点，再拖入匹配的申请项目与已完成故事。
+                选择背景后，关联学校项目与已完成故事，再为每个项目生成 PS 或 ML。
               </p>
             </div>
             {assemblyRoot ? (
@@ -1243,8 +1272,8 @@ export default function WorkbenchPage() {
 
           {!assemblyRoot || !rootBackground ? (
             <div className="assembly-empty">
-              <strong>把“人物背景信息”拖到这里</strong>
-              <p>也可以双击背景表中的条目。装配错误链路会被阻止。</p>
+              <strong>先选择一份人物背景</strong>
+              <p>把左侧背景拖到这里，或双击已有背景条目。</p>
             </div>
           ) : (
             <div className="assembly-tree">
