@@ -9,6 +9,7 @@ import type {
   AnalysisResponse,
   ProfileResponse,
   SessionSnapshot,
+  StoryInstance,
   StoryCards,
   StoryMessage,
   StoryResponse,
@@ -49,6 +50,8 @@ export default function StoryPage() {
   const [status, setStatus] = useState<"interviewing" | "ready">(
     "interviewing",
   );
+  const [activeStoryInstance, setActiveStoryInstance] =
+    useState<StoryInstance | null>(null);
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -56,6 +59,34 @@ export default function StoryPage() {
     const currentAnalysis = loadState<AnalysisResponse>(STORAGE_KEYS.analysis);
     setProfile(currentProfile);
     setAnalysis(currentAnalysis);
+    const activeStoryInstanceId = loadState<string>(
+      STORAGE_KEYS.activeStoryId,
+    );
+
+    if (activeStoryInstanceId) {
+      startRequested.current = true;
+      async function loadStoryInstance() {
+        setLoading(true);
+        try {
+          const story = await apiFetch<StoryInstance>(
+            `/api/story-instances/${activeStoryInstanceId}`,
+          );
+          setActiveStoryInstance(story);
+          setSessionId(story.id);
+          setCards(story.cards);
+          setMessages(story.messages);
+          setRoundNo(story.round_no);
+          setStatus(story.status === "interviewing" ? "interviewing" : "ready");
+        } catch (err) {
+          removeState(STORAGE_KEYS.activeStoryId);
+          setError(readableError(err, "加载故事实例失败"));
+        } finally {
+          setLoading(false);
+        }
+      }
+      void loadStoryInstance();
+      return;
+    }
 
     if (
       !currentProfile?.profile_id ||
@@ -185,8 +216,7 @@ export default function StoryPage() {
       status === "ready" ||
       !input.trim() ||
       !sessionId ||
-      !profile ||
-      !analysis
+      (!activeStoryInstance && (!profile || !analysis))
     )
       return;
     const currentUserMessage = input.trim();
@@ -201,6 +231,23 @@ export default function StoryPage() {
     setMessages(updatedMessages);
     setInput("");
     try {
+      if (activeStoryInstance) {
+        const story = await apiFetch<StoryInstance>(
+          `/api/story-instances/${activeStoryInstance.id}/reply`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_message: currentUserMessage }),
+          },
+        );
+        setActiveStoryInstance(story);
+        setCards(story.cards);
+        setMessages(story.messages);
+        setRoundNo(story.round_no);
+        setStatus(story.status === "interviewing" ? "interviewing" : "ready");
+        saveState(STORAGE_KEYS.activeStoryId, story.id);
+        return;
+      }
       const result = await apiFetch<StoryResponse>("/api/story/reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -221,8 +268,8 @@ export default function StoryPage() {
         session_id: result.session_id,
         cards: result.cards,
         messages: finalMessages,
-        profile_id: profile.profile_id,
-        analysis_id: analysis.analysis_id,
+        profile_id: result.profile_id,
+        analysis_id: result.analysis_id,
         round_no: result.round_no,
         status: result.status,
       } satisfies StorySessionState);
@@ -310,6 +357,7 @@ export default function StoryPage() {
                     <button
                       className="btn-secondary"
                       type="button"
+                      data-agent-capability="story.reload"
                       onClick={() => window.location.reload()}
                     >
                       重新连接访谈
@@ -351,21 +399,31 @@ export default function StoryPage() {
               <button
                 className="btn-secondary"
                 type="button"
-                onClick={() => router.push("/program")}
+                data-agent-capability="app.navigate"
+                data-agent-arg-path={
+                  activeStoryInstance ? "/library" : "/program"
+                }
+                onClick={() =>
+                  router.push(activeStoryInstance ? "/library" : "/program")
+                }
               >
                 返回上一页
               </button>
               <button
                 className="btn-secondary"
                 type="button"
-                onClick={() => router.push("/result")}
+                data-agent-capability="story.continue_result"
+                onClick={() =>
+                  router.push(activeStoryInstance ? "/library" : "/result")
+                }
                 disabled={!completed}
               >
-                去生成结果
+                {activeStoryInstance ? "去组装文书" : "去生成结果"}
               </button>
               <button
                 className="btn"
                 type="button"
+                data-agent-capability="story.answer"
                 onClick={sendReply}
                 disabled={completed || loading || !input.trim() || !sessionId}
               >

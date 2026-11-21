@@ -11,12 +11,14 @@ export type BasicProfile = {
 };
 
 export type ExperienceItem = {
+  id?: string;
   title: string;
   summary: string;
   impact: string;
 };
 
 export type ActivityAward = {
+  id?: string;
   title: string;
   summary: string;
 };
@@ -36,6 +38,106 @@ export type ProfileData = {
 export type ProfileResponse = {
   profile_id: string;
   profile: ProfileData;
+  person_id?: string | null;
+  background_instance_id?: string | null;
+  background_version?: number | null;
+};
+
+export type PersonSummary = {
+  id: string;
+  display_name: string;
+  aliases: string[];
+  background_count: number;
+  story_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BackgroundInstance = {
+  id: string;
+  person_id: string;
+  resume_name: string;
+  source_filename: string;
+  source_sha256: string;
+  status: 'draft' | 'extracted' | 'confirmed' | 'archived';
+  version: number;
+  profile: ProfileData;
+  legacy_profile_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StoryInstance = {
+  id: string;
+  background_instance_id: string;
+  application_project_id?: string | null;
+  title: string;
+  focus: string;
+  status: 'interviewing' | 'ready' | 'archived';
+  round_no: number;
+  cards: StoryCards;
+  messages: StoryMessage[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EssayProjectArtifactVersion = {
+  id: string;
+  project_id: string;
+  artifact_type: 'outline' | 'draft';
+  version_no: number;
+  created_at: string;
+  outline?: EssayOutline;
+  draft?: string;
+  metadata: Record<string, unknown>;
+};
+
+export type EssayProject = {
+  id: string;
+  person_id: string;
+  background_instance_id: string;
+  application_project_id?: string | null;
+  story_instance_ids: string[];
+  program: ProgramContext;
+  analysis?: ProgramAnalysis | null;
+  outline?: EssayOutline | null;
+  draft?: string | null;
+  review?: DraftReview | null;
+  status:
+    | 'created'
+    | 'analyzed'
+    | 'outlined'
+    | 'drafted'
+    | 'reviewed'
+    | 'stale'
+    | 'archived';
+  current_step: 'created' | 'analysis' | 'outline' | 'draft' | 'review' | 'completed';
+  versions: EssayProjectArtifactVersion[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkspaceSnapshot = {
+  persons: PersonSummary[];
+  backgrounds: BackgroundInstance[];
+  application_projects: ApplicationProject[];
+  stories: StoryInstance[];
+  projects: EssayProject[];
+};
+
+export type ApplicationProject = {
+  id: string;
+  background_instance_id: string;
+  person_id: string;
+  school_name: string;
+  program_name: string;
+  program_details: string;
+  status: 'active' | 'archived';
+  story_count: number;
+  essay_count: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ProgramContext = {
@@ -177,17 +279,21 @@ export type BatchEssayInput = {
   essay_type: EssayType;
   word_limit: number;
   prompt_text: string;
+  tone?: BatchTone;
 };
 
 export type BatchDirectionInput = {
+  application_project_id?: string;
   school_name: string;
   program_name: string;
   program_details: string;
   essays: BatchEssayInput[];
+  story_instance_ids: string[];
 };
 
 export type BatchRequest = {
-  profile_id: string;
+  profile_id?: string;
+  background_instance_id?: string;
   request_id: string;
   tone: BatchTone;
   directions: BatchDirectionInput[];
@@ -200,6 +306,11 @@ export type BatchItem = {
   status: 'pending' | 'running' | 'completed' | 'failed';
   stage: 'pending' | 'analysis' | 'outline' | 'draft' | 'completed' | 'failed';
   session_id: string | null;
+  project_id: string | null;
+  application_project_id: string | null;
+  background_instance_id: string | null;
+  story_instance_ids: string[];
+  tone: BatchTone;
   draft: string | null;
   error_code: string | null;
   error_message: string | null;
@@ -208,6 +319,8 @@ export type BatchItem = {
 export type BatchResponse = {
   id: string;
   profile_id: string;
+  background_instance_id: string | null;
+  execution_mode: 'legacy' | 'instance';
   tone: BatchTone;
   status: 'pending' | 'running' | 'completed' | 'partial_failed' | 'failed';
   created_at: string;

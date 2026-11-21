@@ -36,6 +36,65 @@ class Settings(BaseModel):
         ge=0,
         le=4,
     )
+    qwen_api_key: str = Field(
+        default=os.getenv("QWEN_API_KEY", os.getenv("DASHSCOPE_API_KEY", ""))
+    )
+    qwen_base_url: str = Field(
+        default=os.getenv(
+            "QWEN_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+    )
+    qwen_intent_model: str = Field(
+        default=os.getenv("QWEN_INTENT_MODEL", "qwen-plus-latest")
+    )
+    qwen_asr_model: str = Field(
+        default=os.getenv(
+            "QWEN_ASR_MODEL",
+            "qwen-audio-3.1-asr-flash-streaming",
+        )
+    )
+    qwen_asr_file_model: str = Field(
+        default=os.getenv(
+            "QWEN_ASR_FILE_MODEL",
+            "qwen-audio-3.1-asr-flash",
+        )
+    )
+    qwen_asr_ws_url: str = Field(
+        default=os.getenv("QWEN_ASR_WS_URL", "")
+    )
+    qwen_asr_vad_model: str = Field(
+        default=os.getenv("QWEN_ASR_VAD_MODEL", "near_meeting_16k")
+    )
+    qwen_asr_max_sentence_silence_ms: int = Field(
+        default=int(os.getenv("QWEN_ASR_MAX_SENTENCE_SILENCE_MS", "1200")),
+        ge=200,
+        le=6000,
+    )
+    qwen_temperature: float = Field(
+        default=float(os.getenv("QWEN_TEMPERATURE", "0.1")),
+        ge=0,
+        le=1,
+    )
+    qwen_timeout_seconds: float = Field(
+        default=float(os.getenv("QWEN_TIMEOUT_SECONDS", "90")),
+        ge=10,
+        le=300,
+    )
+    qwen_max_retries: int = Field(
+        default=int(os.getenv("QWEN_MAX_RETRIES", "2")),
+        ge=0,
+        le=4,
+    )
+    qwen_asr_language: str = Field(
+        default=os.getenv("QWEN_ASR_LANGUAGE", "zh"),
+        max_length=16,
+    )
+    voice_max_audio_bytes: int = Field(
+        default=int(os.getenv("VOICE_MAX_AUDIO_BYTES", str(6 * 1024 * 1024))),
+        ge=64 * 1024,
+        le=10 * 1024 * 1024,
+    )
     database_path: str = Field(
         default=os.getenv(
             "DATABASE_PATH",
@@ -43,14 +102,19 @@ class Settings(BaseModel):
         )
     )
     cors_origins: List[str] = Field(
-        default_factory=lambda: [
-            origin.strip()
-            for origin in os.getenv(
-                "APP_CORS_ORIGINS",
-                "http://localhost:3000,http://127.0.0.1:3000",
-            ).split(",")
-            if origin.strip()
-        ]
+        default_factory=lambda: list(
+            dict.fromkeys(
+                [
+                    "http://localhost:3000",
+                    "http://127.0.0.1:3000",
+                    *[
+                        origin.strip()
+                        for origin in os.getenv("APP_CORS_ORIGINS", "").split(",")
+                        if origin.strip()
+                    ],
+                ]
+            )
+        )
     )
     max_upload_bytes: int = Field(
         default=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))),

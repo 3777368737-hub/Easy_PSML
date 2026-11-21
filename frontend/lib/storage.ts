@@ -9,6 +9,13 @@ export const STORAGE_KEYS = {
   batchForm: "gradpilot_batch_form",
   batchSubmission: "gradpilot_batch_submission",
   batchId: "gradpilot_batch_id",
+  voiceButtonPosition: "gradpilot_voice_button_position",
+  agentHistory: "gradpilot_agent_history",
+  activePersonId: "gradpilot_active_person_id",
+  activeBackgroundId: "gradpilot_active_background_id",
+  activeStoryId: "gradpilot_active_story_id",
+  activeApplicationProjectId: "gradpilot_active_application_project_id",
+  activeProjectId: "gradpilot_active_project_id",
 } as const;
 
 export function saveState(key: string, value: unknown): boolean {
@@ -58,4 +65,7 @@ export function clearDownstreamState(): void {
   removeState(STORAGE_KEYS.resultSnapshot);
   removeState(STORAGE_KEYS.batchForm);
   removeState(STORAGE_KEYS.batchSubmission);
+  removeState(STORAGE_KEYS.activeStoryId);
+  removeState(STORAGE_KEYS.activeApplicationProjectId);
+  removeState(STORAGE_KEYS.activeProjectId);
 }

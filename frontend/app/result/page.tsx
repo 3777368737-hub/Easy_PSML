@@ -9,6 +9,7 @@ import { loadState, removeState, saveState, STORAGE_KEYS } from "@/lib/storage";
 import type {
   AnalysisResponse,
   ArtifactVersion,
+  EssayProject,
   HistoryItem,
   ProfileResponse,
   ProgramFormState,
@@ -51,6 +52,9 @@ export default function ResultPage() {
   const [copyStatus, setCopyStatus] = useState("");
   const [selectedArtifact, setSelectedArtifact] =
     useState<ArtifactVersion | null>(null);
+  const [activeProject, setActiveProject] = useState<EssayProject | null>(
+    null,
+  );
 
   const fetchSnapshot = useCallback(
     async (sessionId: string): Promise<SessionSnapshot | null> => {
@@ -83,7 +87,32 @@ export default function ResultPage() {
     }
   }, []);
 
+  const fetchActiveProject = useCallback(async (projectId: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      const project = await apiFetch<EssayProject>(
+        `/api/essay-projects/${projectId}`,
+      );
+      setActiveProject(project);
+      saveState(STORAGE_KEYS.activeProjectId, project.id);
+      return project;
+    } catch (err) {
+      setError(readableError(err, "加载文书项目失败"));
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
+    const activeProjectId = loadState<string>(STORAGE_KEYS.activeProjectId);
+    if (activeProjectId) {
+      void fetchActiveProject(activeProjectId);
+      void refreshHistory();
+      removeState(STORAGE_KEYS.legacyHistory);
+      return;
+    }
     const savedSession = loadState<StorySessionState>(
       STORAGE_KEYS.storySession,
     );
@@ -95,7 +124,7 @@ export default function ResultPage() {
     }
     void refreshHistory();
     removeState(STORAGE_KEYS.legacyHistory);
-  }, [fetchSnapshot, refreshHistory]);
+  }, [fetchActiveProject, fetchSnapshot, refreshHistory]);
 
   async function generateOutline() {
     if (!session?.session_id || snapshot?.status !== "ready") return;
@@ -169,10 +198,50 @@ export default function ResultPage() {
     }
   }
 
+  async function runProjectAction(
+    action: "analyze" | "outline" | "draft" | "review",
+    rewrite = false,
+  ) {
+    if (!activeProject) return;
+    if (rewrite && !revisionInstruction.trim()) {
+      setError("请先输入修改意见。");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const project = await apiFetch<EssayProject>(
+        `/api/essay-projects/${activeProject.id}/${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: action === "draft"
+            ? JSON.stringify({
+                tone: "balanced",
+                target_length: activeProject.program.word_limit,
+                revision_instruction: rewrite
+                  ? revisionInstruction.trim()
+                  : "",
+              })
+            : undefined,
+        },
+      );
+      setActiveProject(project);
+      if (rewrite) setRevisionInstruction("");
+    } catch (err) {
+      setError(readableError(err, "文书项目操作失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function loadRecord(item: HistoryItem) {
     setLoading(true);
     setError("");
     try {
+      setActiveProject(null);
+      removeState(STORAGE_KEYS.activeProjectId);
+      removeState(STORAGE_KEYS.activeStoryId);
       const next = await apiFetch<SessionSnapshot>(
         `/api/session/${item.session_id}`,
       );
@@ -206,7 +275,12 @@ export default function ResultPage() {
   }
 
   async function clearHistory() {
-    if (!window.confirm("确认清空当前浏览器的全部申请记录？此操作不可恢复。"))
+    const agentAlreadyConfirmed =
+      document.documentElement.dataset.agentExecuting === "history.clear";
+    if (
+      !agentAlreadyConfirmed &&
+      !window.confirm("确认清空当前浏览器的全部申请记录？此操作不可恢复。")
+    )
       return;
     setLoading(true);
     try {
@@ -223,6 +297,11 @@ export default function ResultPage() {
       removeState(STORAGE_KEYS.batchForm);
       removeState(STORAGE_KEYS.batchSubmission);
       removeState(STORAGE_KEYS.batchId);
+      removeState(STORAGE_KEYS.activeProjectId);
+      removeState(STORAGE_KEYS.activeStoryId);
+      removeState(STORAGE_KEYS.activePersonId);
+      removeState(STORAGE_KEYS.activeBackgroundId);
+      setActiveProject(null);
     } catch (err) {
       setError(readableError(err, "清空历史失败"));
     } finally {
@@ -254,13 +333,266 @@ export default function ResultPage() {
       await navigator.clipboard.writeText(visibleDraft);
       setCopyStatus("草稿已复制。");
     } catch {
-      setCopyStatus("复制失败，请使用“下载草稿”保存内容。");
+      const textarea = document.createElement("textarea");
+      textarea.value = visibleDraft;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      setCopyStatus(
+        copied
+          ? "草稿已复制。"
+          : "复制失败，请使用“下载草稿”保存内容。",
+      );
     }
   }
   const wordCount =
     visibleDraft?.trim().split(/\s+/).filter(Boolean).length || 0;
   const hasHistory = useMemo(() => history.length > 0, [history]);
   const canGenerate = snapshot?.status === "ready";
+
+  function downloadProjectDraft() {
+    if (!activeProject?.draft) return;
+    const blob = new Blob([activeProject.draft], {
+      type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `gradpilot-${activeProject.id.slice(0, 8)}-draft.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyProjectDraft() {
+    if (!activeProject?.draft) return;
+    try {
+      await navigator.clipboard.writeText(activeProject.draft);
+      setCopyStatus("草稿已复制。");
+    } catch {
+      setCopyStatus("复制失败，请下载草稿。");
+    }
+  }
+
+  if (activeProject) {
+    const projectWordCount =
+      activeProject.draft?.trim().split(/\s+/).filter(Boolean).length || 0;
+    return (
+      <main className="section">
+        <div className="container">
+          <div className="card">
+            <div className="kicker">INSTANCE WRITING PROJECT</div>
+            <h1 className="section-title">
+              {activeProject.program.school_name} ·{" "}
+              {activeProject.program.program_name}
+            </h1>
+            <p className="muted">
+              {activeProject.program.essay_type} · 目标{" "}
+              {activeProject.program.word_limit} 词 · 已引用{" "}
+              {activeProject.story_instance_ids.length} 个故事实例
+            </p>
+            {activeProject.status === "stale" ? (
+              <p className="notice">
+                背景或故事素材已更新，请重新执行项目分析和后续生成。
+              </p>
+            ) : null}
+            {error ? <p className="notice" role="alert">{error}</p> : null}
+            {loading ? (
+              <p className="busy-status" role="status">
+                <span className="spinner" /> 正在处理文书项目…
+              </p>
+            ) : null}
+            <div className="actions">
+              <button
+                className="btn-secondary"
+                type="button"
+                data-agent-capability="project.analyze"
+                disabled={loading}
+                onClick={() => void runProjectAction("analyze")}
+              >
+                项目分析
+              </button>
+              <button
+                className="btn-secondary"
+                type="button"
+                data-agent-capability="project.outline"
+                disabled={loading}
+                onClick={() => void runProjectAction("outline")}
+              >
+                生成中文大纲
+              </button>
+              <button
+                className="btn"
+                type="button"
+                data-agent-capability="project.draft"
+                disabled={loading}
+                onClick={() => void runProjectAction("draft")}
+              >
+                生成英文草稿
+              </button>
+              <button
+                className="btn-secondary"
+                type="button"
+                data-agent-capability="project.review"
+                disabled={loading || !activeProject.draft}
+                onClick={() => void runProjectAction("review")}
+              >
+                审核草稿
+              </button>
+            </div>
+          </div>
+
+          {activeProject.analysis ? (
+            <div className="card" style={{ marginTop: 16 }}>
+              <h2 className="section-title">项目分析</h2>
+              <div className="analysis-grid">
+                <div className="mini-card">
+                  <h3>项目关注点</h3>
+                  <ul className="list">
+                    {activeProject.analysis.program_focus.map((item, index) => (
+                      <li key={`${item}-${index}`}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="mini-card">
+                  <h3>匹配优势</h3>
+                  <ul className="list">
+                    {activeProject.analysis.matched_strengths.map(
+                      (item, index) => (
+                        <li key={`${item}-${index}`}>{item}</li>
+                      ),
+                    )}
+                  </ul>
+                </div>
+                <div className="mini-card">
+                  <h3>写作建议</h3>
+                  <ul className="list">
+                    {activeProject.analysis.writing_suggestions.map(
+                      (item, index) => (
+                        <li key={`${item}-${index}`}>{item}</li>
+                      ),
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {activeProject.outline ? (
+            <div className="card" style={{ marginTop: 16 }}>
+              <h2 className="section-title">{activeProject.outline.title}</h2>
+              {activeProject.outline.paragraphs.map((paragraph, index) => (
+                <div className="mini-card" key={`${paragraph.heading}-${index}`}>
+                  <h3>{paragraph.heading}</h3>
+                  <p><strong>目标：</strong>{paragraph.goal}</p>
+                  <p><strong>核心内容：</strong>{paragraph.key_content}</p>
+                  <p>
+                    <strong>使用经历：</strong>
+                    {paragraph.use_this_experience}
+                  </p>
+                  <p>
+                    <strong>重点突出：</strong>
+                    {paragraph.what_to_highlight}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="card" style={{ marginTop: 16 }}>
+            <h2 className="section-title">英文草稿</h2>
+            {activeProject.draft ? (
+              <>
+                <div className="document-meta">
+                  <span>APPLICATION ESSAY</span>
+                  <span>
+                    {projectWordCount} 词 / 目标{" "}
+                    {activeProject.program.word_limit} 词
+                  </span>
+                </div>
+                <pre className="code-block">{activeProject.draft}</pre>
+                <div className="actions">
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    data-agent-capability="essay.download"
+                    onClick={downloadProjectDraft}
+                  >
+                    下载草稿
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    data-agent-capability="essay.copy"
+                    onClick={() => void copyProjectDraft()}
+                  >
+                    复制草稿
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="muted">尚未生成草稿。</p>
+            )}
+            <p className="muted" role="status">{copyStatus}</p>
+            <div className="field revision-panel">
+              <label htmlFor="project-revision-instruction">
+                对草稿的修改意见
+              </label>
+              <textarea
+                id="project-revision-instruction"
+                value={revisionInstruction}
+                onChange={(event) =>
+                  setRevisionInstruction(event.target.value)
+                }
+                disabled={loading || !activeProject.draft}
+                maxLength={4000}
+                placeholder="例如：压缩第二段，并加强项目匹配。"
+              />
+            </div>
+            <button
+              className="btn-secondary"
+              type="button"
+              data-agent-capability="project.rewrite"
+              disabled={
+                loading ||
+                !activeProject.draft ||
+                !revisionInstruction.trim()
+              }
+              onClick={() => void runProjectAction("draft", true)}
+            >
+              按意见重写草稿
+            </button>
+          </div>
+
+          {activeProject.review ? (
+            <div className="card" style={{ marginTop: 16 }}>
+              <h2 className="section-title">草稿审核</h2>
+              <p><strong>优势：</strong>{activeProject.review.strengths.join("；")}</p>
+              <p><strong>问题：</strong>{activeProject.review.weaknesses.join("；")}</p>
+              <p>
+                <strong>调整建议：</strong>
+                {activeProject.review.adaptation_tip}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="form-footer" style={{ marginTop: 16 }}>
+            <button
+              className="btn-secondary"
+              type="button"
+              data-agent-capability="app.navigate"
+              data-agent-arg-path="/library"
+              onClick={() => router.push("/library")}
+            >
+              返回装配工作台
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="section">
@@ -295,6 +627,7 @@ export default function ResultPage() {
             <button
               className="btn-secondary"
               type="button"
+              data-agent-capability="essay.outline"
               onClick={generateOutline}
               disabled={loading || !canGenerate}
             >
@@ -303,6 +636,7 @@ export default function ResultPage() {
             <button
               className="btn"
               type="button"
+              data-agent-capability="essay.draft"
               onClick={() => generateDraft(false)}
               disabled={loading || !canGenerate}
             >
@@ -320,6 +654,8 @@ export default function ResultPage() {
                   type="button"
                   className={`tab ${activeTab === tab ? "active" : ""}`}
                   aria-pressed={activeTab === tab}
+                  data-agent-capability="result.switch_tab"
+                  data-agent-arg-tab={tab === "大纲" ? "outline" : "draft"}
                   onClick={() => {
                     setActiveTab(tab);
                     setCopyStatus("");
@@ -342,6 +678,7 @@ export default function ResultPage() {
               <button
                 type="button"
                 className="btn-secondary"
+                data-agent-capability="result.restore_current"
                 onClick={() => {
                   setSelectedArtifact(null);
                   setCopyStatus("");
@@ -428,6 +765,7 @@ export default function ResultPage() {
                   <button
                     className="btn-secondary"
                     type="button"
+                    data-agent-capability="essay.download"
                     onClick={downloadDraft}
                   >
                     <Icon name="file" size={16} />
@@ -436,6 +774,7 @@ export default function ResultPage() {
                   <button
                     className="btn-secondary"
                     type="button"
+                    data-agent-capability="essay.copy"
                     onClick={copyDraft}
                   >
                     复制草稿
@@ -443,6 +782,7 @@ export default function ResultPage() {
                   <button
                     className="btn-secondary"
                     type="button"
+                    data-agent-capability="essay.review"
                     onClick={runReview}
                     disabled={loading || !!selectedArtifact}
                   >
@@ -470,6 +810,7 @@ export default function ResultPage() {
                 <button
                   className="btn-secondary"
                   type="button"
+                  data-agent-capability="essay.rewrite"
                   onClick={() => generateDraft(true)}
                   disabled={
                     loading ||
@@ -526,6 +867,8 @@ export default function ResultPage() {
                     <button
                       className="btn-secondary"
                       type="button"
+                      data-agent-capability="result.load_version"
+                      data-agent-arg-version-id={version.id}
                       onClick={() => {
                         setSelectedArtifact(version);
                         setCopyStatus("");
@@ -550,6 +893,7 @@ export default function ResultPage() {
               <button
                 className="btn-secondary"
                 type="button"
+                data-agent-capability="history.clear"
                 onClick={clearHistory}
                 disabled={loading}
               >
@@ -580,6 +924,8 @@ export default function ResultPage() {
               <button
                 className="btn-secondary"
                 type="button"
+                data-agent-capability="history.load"
+                data-agent-arg-session-id={item.session_id}
                 onClick={() => loadRecord(item)}
                 disabled={loading}
               >
@@ -593,6 +939,8 @@ export default function ResultPage() {
           <button
             className="btn-secondary"
             type="button"
+            data-agent-capability="app.navigate"
+            data-agent-arg-path="/story"
             onClick={() => router.push("/story")}
           >
             返回故事挖掘

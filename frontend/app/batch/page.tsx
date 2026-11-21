@@ -5,13 +5,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ApiError, apiFetch, readableError } from '@/lib/api';
 import {
-  directionInputs, ESSAY_TYPES, essayLabel, MAX_DIRECTIONS, newDirection,
+  directionInputs, ESSAY_TYPES, essayLabel, newDirection,
   validateDirections, type DirectionForm, type EssayForm,
 } from '@/lib/batch-form';
 import { loadState, removeState, saveState, STORAGE_KEYS } from '@/lib/storage';
 import type {
   BatchItem, BatchRequest, BatchResponse, BatchTone, EssayType,
-  ProfileResponse, SessionSnapshot, StorySessionState,
+  ProfileResponse, SessionSnapshot, StorySessionState, WorkspaceSnapshot,
 } from '@/lib/types';
 
 const statusLabels: Record<BatchResponse['status'], string> = {
@@ -46,6 +46,8 @@ export default function BatchPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
+  const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
+  const [backgroundInstanceId, setBackgroundInstanceId] = useState('');
   const [directions, setDirections] = useState<DirectionForm[]>([]);
   const [tone, setTone] = useState<BatchTone>('balanced');
   const [batch, setBatch] = useState<BatchResponse | null>(null);
@@ -66,7 +68,11 @@ export default function BatchPage() {
     setProfile(currentProfile);
     const saved = loadState<{ profile_id: string; directions: DirectionForm[]; tone: BatchTone }>(STORAGE_KEYS.batchForm);
     if (saved?.profile_id === currentProfile?.profile_id && saved?.directions?.length) {
-      setDirections(saved.directions);
+      setDirections(saved.directions.map((direction) => ({
+        ...direction,
+        application_project_id: direction.application_project_id || '',
+        story_instance_ids: direction.story_instance_ids || [],
+      })));
       setTone(saved.tone);
     } else {
       setDirections([newDirection()]);
@@ -84,6 +90,18 @@ export default function BatchPage() {
     }).catch((err) => {
       if (!cancelled) setError(readableError(err, '加载批量任务失败'));
     });
+    void apiFetch<WorkspaceSnapshot>('/api/workspace').then((next) => {
+      if (cancelled) return;
+      setWorkspace(next);
+      const activeId = loadState<string>(STORAGE_KEYS.activeBackgroundId);
+      const nextBackground =
+        next.backgrounds.find((item) => item.id === activeId) ||
+        next.backgrounds.find(
+          (item) => item.id === currentProfile?.background_instance_id,
+        ) ||
+        next.backgrounds[0];
+      if (nextBackground) setBackgroundInstanceId(nextBackground.id);
+    }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -151,7 +169,12 @@ export default function BatchPage() {
       }
     }
     const request = pendingRequest || {
-      profile_id: profile.profile_id, request_id: crypto.randomUUID(),
+      ...(backgroundInstanceId
+        ? { background_instance_id: backgroundInstanceId }
+        : profile
+          ? { profile_id: profile.profile_id }
+          : {}),
+      request_id: crypto.randomUUID(),
       tone, directions: directionInputs(directions),
     } satisfies BatchRequest;
     // Retry an uncertain response with the same persisted request identifier.
@@ -198,11 +221,22 @@ export default function BatchPage() {
   }
 
   async function openResult(item: BatchItem) {
-    if (!item.session_id || actionLock.current) return;
+    if ((!item.session_id && !item.project_id) || actionLock.current) return;
     actionLock.current = true;
     setBusy(true);
     setError('');
     try {
+      if (item.project_id) {
+        saveState(STORAGE_KEYS.activeProjectId, item.project_id);
+        if (item.background_instance_id) {
+          saveState(STORAGE_KEYS.activeBackgroundId, item.background_instance_id);
+        }
+        router.push('/result');
+        return;
+      }
+      if (!item.session_id) return;
+      removeState(STORAGE_KEYS.activeProjectId);
+      removeState(STORAGE_KEYS.activeStoryId);
       const next = await apiFetch<SessionSnapshot>(`/api/session/${item.session_id}`);
       saveState(STORAGE_KEYS.storySession, {
         session_id: next.session_id, profile_id: next.profile_id, analysis_id: next.analysis_id,
@@ -242,6 +276,11 @@ export default function BatchPage() {
   const total = directions.reduce((count, direction) => count + ESSAY_TYPES.filter((type) => direction.essays[type].enabled).length, 0);
   const anotherActive = history.some(isActive);
   const formLocked = busy || Boolean(pendingRequest);
+  const backgrounds = workspace?.backgrounds || [];
+  const applicationProjects = workspace?.application_projects || [];
+  const stories = workspace?.stories || [];
+  const selectedBackground = backgrounds.find((item) => item.id === backgroundInstanceId);
+  const canCompose = Boolean(profile || selectedBackground);
 
   return (
     <main className="section">
@@ -251,12 +290,52 @@ export default function BatchPage() {
           <h1 className="section-title">批量生成 PS 与 ML</h1>
           <p className="muted">为每个申请方向独立分析项目、生成中文大纲和英文草稿。可同时生成两类文书，完成后继续修改或下载。</p>
           <p className="notice">批量模式直接使用已录入的个人资料，跳过故事问答。请先补充真实经历、申请动机和职业目标，生成后核对初稿。</p>
-          {!ready ? <p role="status">正在加载个人资料与任务…</p> : profile ? (
-            <p className="batch-profile">当前背景：<strong>{profile.profile.basic_profile.full_name || '申请者'}</strong> · {profile.profile.basic_profile.current_university} · {profile.profile.basic_profile.major} <Link href="/profile">编辑背景 →</Link></p>
-          ) : <p className="notice"><Link href="/profile">先录入个人信息 →</Link>，完成后选择“继续：批量生成”。已有批量任务仍可在下方查看。</p>}
+          {!ready ? <p role="status">正在加载个人资料与任务…</p> : canCompose ? (
+            <>
+              <div className="field">
+                <label htmlFor="batch-background-instance">复用背景实例</label>
+                <select
+                  id="batch-background-instance"
+                  value={backgroundInstanceId}
+                  onChange={(event) => {
+                    setBackgroundInstanceId(event.target.value);
+                    saveState(STORAGE_KEYS.activeBackgroundId, event.target.value);
+                    setDirections((items) => items.map((item) => ({
+                      ...item,
+                      story_instance_ids: [],
+                    })));
+                  }}
+                >
+                  <option value="">使用当前传统背景资料</option>
+                  {backgrounds.map((background) => (
+                    <option key={background.id} value={background.id}>
+                      {background.profile.basic_profile.full_name} · {background.resume_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="batch-profile">
+                当前背景：
+                <strong>
+                  {selectedBackground?.profile.basic_profile.full_name ||
+                    profile?.profile.basic_profile.full_name ||
+                    '申请者'}
+                </strong>
+                {' · '}
+                {selectedBackground?.resume_name || '当前资料'}
+                {' · '}
+                {selectedBackground?.profile.basic_profile.current_university ||
+                  profile?.profile.basic_profile.current_university}
+                {' · '}
+                {selectedBackground?.profile.basic_profile.major ||
+                  profile?.profile.basic_profile.major}{' '}
+                <Link href="/library">管理实例 →</Link>
+              </p>
+            </>
+          ) : <p className="notice"><Link href="/library">先创建人物和背景实例 →</Link>，或通过背景信息页录入资料。已有批量任务仍可在下方查看。</p>}
           {error ? <p className="notice" role="alert">{error}</p> : null}
           {pendingRequest ? <p className="notice" role="status">上次提交结果尚未确认。点击“确认上次提交”将使用原任务编号重新查询或提交，避免重复生成。</p> : null}
-          {profile ? (
+          {canCompose ? (
             <form onSubmit={submit} noValidate>
               <fieldset className="batch-fieldset" disabled={formLocked}>
                 <legend className="sr-only">申请方向与文书要求</legend>
@@ -274,7 +353,7 @@ export default function BatchPage() {
                       <legend>方向 {index + 1}</legend>
                       <div className="batch-heading">
                         <p className="muted">分别填写这个方向的 PS 和 ML 要求。</p>
-                        <button type="button" className="btn-secondary" disabled={directions.length <= 1} onClick={() => setDirections((items) => items.filter((item) => item.id !== direction.id))}>移除方向 {index + 1}</button>
+                        <button type="button" className="btn-secondary" data-agent-capability="batch.remove_direction" data-agent-arg-index={index} disabled={directions.length <= 1} onClick={() => setDirections((items) => items.filter((item) => item.id !== direction.id))}>移除方向 {index + 1}</button>
                       </div>
                       <div className="grid-2">
                         <div className="field">
@@ -289,9 +368,100 @@ export default function BatchPage() {
                         </div>
                       </div>
                       <div className="field">
+                        <label htmlFor={`${direction.id}-application-project`}>
+                          绑定的申请项目<span className="optional-mark">选择故事时必填</span>
+                        </label>
+                        <select
+                          id={`${direction.id}-application-project`}
+                          value={direction.application_project_id || ''}
+                          onChange={(event) =>
+                            updateDirection(direction.id, {
+                              application_project_id: event.target.value,
+                              story_instance_ids: [],
+                            })
+                          }
+                        >
+                          <option value="">不绑定故事项目</option>
+                          {applicationProjects
+                            .filter(
+                              (project) =>
+                                project.background_instance_id ===
+                                backgroundInstanceId,
+                            )
+                            .map((project) => (
+                              <option key={project.id} value={project.id}>
+                                {project.school_name} · {project.program_name}
+                              </option>
+                            ))}
+                        </select>
+                        <FieldError
+                          id={`${direction.id}-stories`}
+                          errors={fieldErrors}
+                        />
+                      </div>
+                      <div className="field">
                         <label htmlFor={`${direction.id}-details`}>项目官网资料 / 课程与研究方向<span className="optional-mark">选填</span></label>
                         <textarea id={`${direction.id}-details`} maxLength={30000} value={direction.program_details} onChange={(event) => updateDirection(direction.id, { program_details: event.target.value })} placeholder="粘贴已核实的项目资料，帮助文书写出具体的匹配理由。" />
                         <FieldError id={`${direction.id}-details`} errors={fieldErrors} />
+                      </div>
+                      <div className="field">
+                        <label htmlFor={`${direction.id}-stories`}>
+                          复用的已完成故事<span className="optional-mark">可选</span>
+                        </label>
+                        <select
+                          id={`${direction.id}-stories`}
+                          multiple
+                          value={direction.story_instance_ids || []}
+                          onChange={(event) =>
+                            updateDirection(direction.id, {
+                              story_instance_ids: Array.from(
+                                event.target.selectedOptions,
+                                (option) => option.value,
+                              ),
+                            })
+                          }
+                        >
+                          {stories
+                            .filter(
+                              (story) =>
+                                story.background_instance_id ===
+                                  backgroundInstanceId &&
+                                story.status === 'ready' &&
+                                (!direction.application_project_id ||
+                                  story.application_project_id ===
+                                    direction.application_project_id),
+                            )
+                            .map((story) => (
+                              <option key={story.id} value={story.id}>
+                                {story.title} · 第 {story.round_no}/3 轮
+                              </option>
+                            ))}
+                        </select>
+                        {backgroundInstanceId &&
+                        !stories.some(
+                          (story) =>
+                            story.background_instance_id ===
+                              backgroundInstanceId &&
+                            story.status === 'ready',
+                        ) ? (
+                          <p className="muted">
+                            这个故事背景下还没有已完成故事，本次会只使用背景资料。
+                          </p>
+                        ) : null}
+                        {direction.story_instance_ids?.length ? (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            data-agent-capability="batch.clear_stories"
+                            onClick={() =>
+                              updateDirection(direction.id, {
+                                story_instance_ids: [],
+                              })
+                            }
+                          >
+                            清除此方向的故事选择
+                          </button>
+                        ) : null}
                       </div>
                       <div id={`${direction.id}-types`} tabIndex={-1}><FieldError id={`${direction.id}-types`} errors={fieldErrors} /></div>
                       <div className="grid-2">
@@ -321,12 +491,12 @@ export default function BatchPage() {
                   ))}
                 </div>
                 <div className="actions">
-                  <button className="btn-secondary" type="button" disabled={directions.length >= MAX_DIRECTIONS} onClick={() => setDirections((items) => [...items, newDirection()])}>+ 添加方向（{directions.length}/{MAX_DIRECTIONS}）</button>
+                  <button className="btn-secondary" type="button" data-agent-capability="batch.add_direction" onClick={() => setDirections((items) => [...items, newDirection()])}>+ 添加方向（当前 {directions.length} 个）</button>
                 </div>
               </fieldset>
               <div className="form-footer batch-heading">
                 <span className="muted">共 {directions.length} 个方向、{total} 篇文书。逐篇生成，耗时随篇数和字数增加。</span>
-                <button className="btn" type="submit" disabled={busy || !ready || (!pendingRequest && anotherActive)}>{busy ? '正在处理…' : pendingRequest ? '确认上次提交' : `开始批量生成 ${total} 篇`}</button>
+                <button className="btn" type="submit" data-agent-capability="batch.create" disabled={busy || !ready || (!pendingRequest && anotherActive)}>{busy ? '正在处理…' : pendingRequest ? '确认上次提交' : `开始批量生成 ${total} 篇`}</button>
               </div>
               {anotherActive ? <p className="muted">当前有任务正在处理，完成后可提交下一批。</p> : null}
             </form>
@@ -336,11 +506,11 @@ export default function BatchPage() {
         <section className="card" aria-labelledby="batch-results-title">
           <div className="batch-heading">
             <h2 className="section-title" id="batch-results-title">批量任务与结果</h2>
-            <button className="btn-secondary" type="button" disabled={busy || !ready} onClick={() => { void refreshHistory(); }}>刷新任务</button>
+            <button className="btn-secondary" type="button" data-agent-capability="batch.refresh" disabled={busy || !ready} onClick={() => { void refreshHistory(); }}>刷新任务</button>
           </div>
           {history.length ? <div className="field">
             <label htmlFor="batch-history">查看已保存的批次</label>
-            <select id="batch-history" value={batch?.id || ''} disabled={busy} onChange={(event) => { const next = history.find((item) => item.id === event.target.value); if (next) selectBatch(next); }}>
+            <select id="batch-history" data-agent-capability="batch.select" value={batch?.id || ''} disabled={busy} onChange={(event) => { const next = history.find((item) => item.id === event.target.value); if (next) selectBatch(next); }}>
               {history.map((item) => <option key={item.id} value={item.id}>{new Date(item.created_at).toLocaleString('zh-CN')} · {item.items[0]?.program.school_name} · {item.items.length} 篇 · {statusLabels[item.status]}</option>)}
             </select>
           </div> : <p className="muted">还没有批量任务。填写方向后，一次提交即可开始生成。</p>}
@@ -348,8 +518,8 @@ export default function BatchPage() {
             <div className="batch-heading">
               <p role="status" aria-live="polite"><span className="badge">{statusLabels[batch.status]}</span> 已完成 {completed.length}/{batch.items.length} 篇{failed.length ? `，失败 ${failed.length} 篇` : ''}</p>
               <div className="actions">
-                {failed.length && !batchActive ? <button className="btn-secondary" type="button" disabled={busy || anotherActive} onClick={() => { void retryFailed(); }}>仅重试失败项（{failed.length}）</button> : null}
-                <button className="btn-secondary" type="button" disabled={!completed.length} onClick={() => downloadText(completed.map((item) => `## 方向 ${item.direction_index + 1} · ${item.program.school_name} · ${item.program.program_name}\n\n### ${item.program.essay_type}\n\n${item.draft}`).join('\n\n---\n\n'), `GradPilot-${batch.id.slice(0, 8)}.md`, true)}>下载已完成文书（合并 Markdown）</button>
+                {failed.length && !batchActive ? <button className="btn-secondary" type="button" data-agent-capability="batch.retry" data-agent-arg-batch-id={batch.id} disabled={busy || anotherActive} onClick={() => { void retryFailed(); }}>仅重试失败项（{failed.length}）</button> : null}
+                <button className="btn-secondary" type="button" data-agent-capability="batch.download_all" data-agent-arg-batch-id={batch.id} disabled={!completed.length} onClick={() => downloadText(completed.map((item) => `## 方向 ${item.direction_index + 1} · ${item.program.school_name} · ${item.program.program_name}\n\n### ${item.program.essay_type}\n\n${item.draft}`).join('\n\n---\n\n'), `GradPilot-${batch.id.slice(0, 8)}.md`, true)}>下载已完成文书（合并 Markdown）</button>
               </div>
             </div>
             <progress className="batch-progress" aria-label="文书完成进度" max={batch.items.length} value={completed.length} />
@@ -364,7 +534,7 @@ export default function BatchPage() {
                 {item.status === 'failed' ? <p className="notice" role="alert">{readableError(new ApiError(item.error_message || '生成失败，请重试。', 502, item.error_code || 'internal_error'))}</p> : null}
                 {item.status === 'completed' && item.draft ? <>
                   <details><summary>预览英文草稿（{item.draft.trim().split(/\s+/).length} 词）</summary><div className="batch-draft">{item.draft}</div></details>
-                  <div className="actions"><button className="btn-secondary" type="button" onClick={() => downloadText(item.draft || '', `${item.direction_index + 1}-${item.program.school_name}-${item.program.program_name}-${item.program.essay_type}.txt`)}>下载这篇文书</button><button className="btn" type="button" disabled={busy} onClick={() => { void openResult(item); }}>查看大纲 / 继续修改</button></div>
+                  <div className="actions"><button className="btn-secondary" type="button" data-agent-capability="batch.download_item" data-agent-arg-item-id={item.id} onClick={() => downloadText(item.draft || '', `${item.direction_index + 1}-${item.program.school_name}-${item.program.program_name}-${item.program.essay_type}.txt`)}>下载这篇文书</button><button className="btn" type="button" data-agent-capability="batch.open_result" data-agent-arg-item-id={item.id} disabled={busy} onClick={() => { void openResult(item); }}>查看大纲 / 继续修改</button></div>
                 </> : null}
               </article>)}
             </div>

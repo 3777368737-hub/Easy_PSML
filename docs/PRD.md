@@ -1,9 +1,9 @@
-# GradPilot PRD（开发交付版 v1.2）
+# GradPilot PRD（开发交付版 v1.3）
 
 ## 1. 文档信息
 - 产品：GradPilot（研究生申请文书助手）
-- 版本：v1.2（可靠性增强版）
-- 更新时间：2026-11-18
+- 版本：v1.3（实例化与语音全链路版）
+- 更新时间：2026-11-21
 - 平台：Web（Next.js 前端 + FastAPI 后端）
 
 ## 2. 目标与范围
@@ -21,6 +21,9 @@
 - 多方向 PS / ML 批量生成、逐篇进度与失败重试
 - 匿名浏览器身份隔离
 - 草稿审核
+- 人物、命名简历背景、故事实例和文书项目的独立存储与复用
+- 一个背景实例记录多个学校/专业申请项目，故事与背景和申请项目双重绑定
+- 按人物名和简历名定位实例的语音 Agent
 
 ### 2.3 非范围（Out of Scope）
 - 正式账号与跨设备同步（当前使用浏览器匿名标识）
@@ -105,9 +108,21 @@
 - GET `/api/session/{session_id}`
 - GET `/api/history`
 - DELETE `/api/history`
+- GET `/api/workspace`
+- POST `/api/persons`
+- PATCH `/api/backgrounds/{background_id}/profile`
+- POST `/api/story-instances/start`
+- POST `/api/story-instances/{story_id}/reply`
+- PATCH `/api/story-instances/{story_id}`
+- POST `/api/essay-projects`
+- PATCH `/api/essay-projects/{project_id}`
+- POST `/api/essay-projects/{project_id}/{analyze|outline|draft|review}`
+- POST `/api/agent/domain`
 
 ## 7. 数据存储
 - 服务端 SQLite 保存 profile、project context、analysis、session、artifact versions。
+- 实例层额外保存 person、background instance/version、application project、
+  story instance/version、essay project 和 project artifact。
 - 浏览器保存匿名 `X-Client-Id` 和当前流程缓存。
 - 所有业务接口按匿名客户端身份隔离。
 
@@ -145,3 +160,7 @@
 - 任意客户端不能读取其他客户端的数据
 - 新一轮开始后无旧分析/旧故事残留
 - 历史记录可创建、加载、清空
+- 一个人可以拥有多份命名简历背景
+- 一个背景实例可以拥有多个故事实例
+- 同一申请项目下的故事可以选择用于该项目的 PS/ML 分支，但不能跨项目装配
+- 背景或故事修改后，引用它们的旧文书项目保留版本并标记为过期

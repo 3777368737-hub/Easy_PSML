@@ -75,6 +75,24 @@ function Test-ApiKeyConfigured {
     return $false
 }
 
+function Test-QwenApiKeyConfigured {
+    $envFile = Join-Path $backendDir ".env"
+    if (-not (Test-Path -LiteralPath $envFile)) {
+        return $false
+    }
+
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+        if ($line -match '^\s*(QWEN_API_KEY|DASHSCOPE_API_KEY)\s*=\s*(.+?)\s*$') {
+            $value = $matches[2].Trim().Trim('"').Trim("'")
+            if ($value.Length -gt 0 -and $value -notmatch '^your_') {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
 function Get-ListenerProcess {
     param([int]$Port)
 
@@ -366,6 +384,11 @@ function Write-ControlStatus {
         Write-Host ""
         Write-Host " WARNING: DEEPSEEK_API_KEY is not configured." -ForegroundColor Yellow
         Write-Host " Configure it in: $backendDir\.env" -ForegroundColor Yellow
+    }
+    if (-not (Test-QwenApiKeyConfigured)) {
+        Write-Host ""
+        Write-Host " WARNING: QWEN_API_KEY or DASHSCOPE_API_KEY is not configured." -ForegroundColor Yellow
+        Write-Host " Voice input will remain unavailable until it is configured." -ForegroundColor Yellow
     }
 
     Write-Host ""

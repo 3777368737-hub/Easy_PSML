@@ -288,6 +288,8 @@ export default function ProgramPage() {
                 <button
                   className="btn-secondary"
                   type="button"
+                  data-agent-capability="app.navigate"
+                  data-agent-arg-path="/profile"
                   onClick={() => router.push("/profile")}
                 >
                   返回上一页
@@ -295,6 +297,7 @@ export default function ProgramPage() {
                 <button
                   className="btn"
                   type="submit"
+                  data-agent-capability="program.analyze"
                   disabled={loading || !profile}
                 >
                   {loading ? "正在分析..." : "开始项目分析"}
@@ -387,6 +390,7 @@ export default function ProgramPage() {
               <button
                 className="btn"
                 type="button"
+                data-agent-capability="program.continue_story"
                 onClick={() => router.push("/story")}
               >
                 进入故事挖掘

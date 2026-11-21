@@ -1,7 +1,6 @@
 import type { BatchDirectionInput, EssayType } from '@/lib/types';
 
 export const ESSAY_TYPES: EssayType[] = ['Personal Statement', 'Motivation Letter'];
-export const MAX_DIRECTIONS = 5;
 
 export type EssayForm = { enabled: boolean; word_limit: string; prompt_text: string };
 export type DirectionForm = {
@@ -9,6 +8,8 @@ export type DirectionForm = {
   school_name: string;
   program_name: string;
   program_details: string;
+  application_project_id: string;
+  story_instance_ids: string[];
   essays: Record<EssayType, EssayForm>;
 };
 
@@ -18,6 +19,8 @@ export function newDirection(): DirectionForm {
     school_name: '',
     program_name: '',
     program_details: '',
+    application_project_id: '',
+    story_instance_ids: [],
     essays: {
       'Personal Statement': { enabled: true, word_limit: '800', prompt_text: '' },
       'Motivation Letter': { enabled: true, word_limit: '500', prompt_text: '' },
@@ -31,8 +34,8 @@ export function essayLabel(type: EssayType): string {
 
 export function validateDirections(forms: DirectionForm[]): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (!forms.length || forms.length > MAX_DIRECTIONS) {
-    errors.directions = `请添加 1 到 ${MAX_DIRECTIONS} 个申请方向。`;
+  if (!forms.length) {
+    errors.directions = '请至少添加 1 个申请方向。';
   }
   for (const form of forms) {
     if (!form.school_name.trim() || form.school_name.trim().length > 200) {
@@ -43,6 +46,9 @@ export function validateDirections(forms: DirectionForm[]): Record<string, strin
     }
     if (form.program_details.trim().length > 30000) {
       errors[`${form.id}-details`] = '项目资料最多 30000 个字符。';
+    }
+    if (form.story_instance_ids.length && !form.application_project_id) {
+      errors[`${form.id}-stories`] = '选择故事后必须绑定对应的申请项目。';
     }
     if (!ESSAY_TYPES.some((type) => form.essays[type].enabled)) {
       errors[`${form.id}-types`] = '每个方向至少选择一种文书。';
@@ -68,6 +74,8 @@ export function directionInputs(forms: DirectionForm[]): BatchDirectionInput[] {
     school_name: form.school_name.trim(),
     program_name: form.program_name.trim(),
     program_details: form.program_details.trim(),
+    application_project_id: form.application_project_id || undefined,
+    story_instance_ids: form.story_instance_ids || [],
     essays: ESSAY_TYPES.filter((type) => form.essays[type].enabled).map((type) => ({
       essay_type: type,
       word_limit: Number(form.essays[type].word_limit),

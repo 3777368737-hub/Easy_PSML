@@ -64,6 +64,38 @@ class ApiTests(unittest.TestCase):
             {"ok": True, "database": "ok", "version": "1.1.0"},
         )
 
+    def test_loopback_frontend_origin_is_allowed_by_cors(self) -> None:
+        response = self.client.options(
+            "/api/agent/text/stream",
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": (
+                    "content-type,x-client-id,x-request-id"
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.headers.get("access-control-allow-origin"),
+            "http://127.0.0.1:3000",
+        )
+        patch_response = self.client.options(
+            "/api/backgrounds/example/profile",
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": (
+                    "content-type,x-client-id,x-request-id"
+                ),
+            },
+        )
+        self.assertEqual(patch_response.status_code, 200, patch_response.text)
+        self.assertIn(
+            "PATCH",
+            patch_response.headers.get("access-control-allow-methods", ""),
+        )
+
     def test_profile_endpoint_does_not_return_raw_resume(self) -> None:
         response = self.client.post(
             "/api/profile/extract",

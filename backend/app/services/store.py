@@ -5,7 +5,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -76,6 +76,20 @@ class SessionRecord:
     status: str
     created_at: str
     updated_at: str
+
+
+@dataclass
+class PendingAgentActionRecord:
+    id: str
+    owner_id: str
+    capability: str
+    arguments: Dict[str, Any]
+    missing_fields: List[Dict[str, Any]]
+    status: str
+    summary: str
+    created_at: str
+    updated_at: str
+    expires_at: str
 
 
 class SQLiteStore:
@@ -172,6 +186,8 @@ class SQLiteStore:
                     id TEXT PRIMARY KEY,
                     owner_id TEXT NOT NULL,
                     profile_id TEXT NOT NULL,
+                    background_id TEXT,
+                    execution_mode TEXT NOT NULL DEFAULT 'legacy',
                     request_id TEXT NOT NULL,
                     request_json TEXT NOT NULL,
                     tone TEXT NOT NULL,
@@ -195,6 +211,12 @@ class SQLiteStore:
                     stage TEXT NOT NULL,
                     analysis_id TEXT,
                     session_id TEXT,
+                    project_id TEXT,
+                    application_project_id TEXT,
+                    background_id TEXT,
+                    story_ids_json TEXT NOT NULL DEFAULT '[]',
+                    tone TEXT NOT NULL DEFAULT 'balanced',
+                    draft TEXT,
                     error_code TEXT,
                     error_message TEXT,
                     FOREIGN KEY(batch_id) REFERENCES batches(id) ON DELETE CASCADE,
@@ -204,15 +226,234 @@ class SQLiteStore:
 
                 CREATE INDEX IF NOT EXISTS idx_batch_items_batch
                 ON batch_items(batch_id, item_index);
+
+                CREATE TABLE IF NOT EXISTS agent_pending_actions (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    capability TEXT NOT NULL,
+                    arguments_json TEXT NOT NULL,
+                    missing_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_pending_owner
+                ON agent_pending_actions(owner_id, status, updated_at DESC);
                 """
             )
+            self._ensure_column(connection, "batches", "background_id", "TEXT")
+            self._ensure_column(
+                connection,
+                "batches",
+                "execution_mode",
+                "TEXT NOT NULL DEFAULT 'legacy'",
+            )
+            self._ensure_column(connection, "batch_items", "project_id", "TEXT")
+            self._ensure_column(
+                connection,
+                "batch_items",
+                "application_project_id",
+                "TEXT",
+            )
+            self._ensure_column(connection, "batch_items", "background_id", "TEXT")
+            self._ensure_column(
+                connection,
+                "batch_items",
+                "story_ids_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            self._ensure_column(connection, "batch_items", "draft", "TEXT")
+            self._ensure_column(
+                connection,
+                "batch_items",
+                "tone",
+                "TEXT NOT NULL DEFAULT 'balanced'",
+            )
+
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def healthcheck(self) -> None:
         with self._connection() as connection:
             connection.execute("SELECT 1").fetchone()
 
+    @staticmethod
+    def _pending_from_row(row: sqlite3.Row) -> PendingAgentActionRecord:
+        return PendingAgentActionRecord(
+            id=row["id"],
+            owner_id=row["owner_id"],
+            capability=row["capability"],
+            arguments=json.loads(row["arguments_json"] or "{}"),
+            missing_fields=json.loads(row["missing_json"] or "[]"),
+            status=row["status"],
+            summary=row["summary"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            expires_at=row["expires_at"],
+        )
+
+    def get_pending_agent_action(
+        self, owner_id: str, action_id: str = ""
+    ) -> Optional[PendingAgentActionRecord]:
+        now = _now()
+        with self._connection() as connection:
+            connection.execute(
+                "DELETE FROM agent_pending_actions WHERE expires_at <= ? "
+                "AND status IN ('collecting', 'prepared')",
+                (now,),
+            )
+            if action_id:
+                row = connection.execute(
+                    "SELECT * FROM agent_pending_actions "
+                    "WHERE id = ? AND owner_id = ? AND status IN ('collecting', 'prepared')",
+                    (action_id, owner_id),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT * FROM agent_pending_actions "
+                    "WHERE owner_id = ? AND status IN ('collecting', 'prepared') "
+                    "AND expires_at > ? ORDER BY updated_at DESC LIMIT 1",
+                    (owner_id, now),
+                ).fetchone()
+        return self._pending_from_row(row) if row else None
+
+    def upsert_pending_agent_action(
+        self,
+        owner_id: str,
+        capability: str,
+        arguments: Dict[str, Any],
+        missing_fields: List[Dict[str, Any]],
+        status: str,
+        summary: str,
+        *,
+        action_id: str = "",
+    ) -> PendingAgentActionRecord:
+        now = datetime.now(timezone.utc)
+        created_at = now.isoformat()
+        expires_at = (now + timedelta(minutes=15)).isoformat()
+        existing = self.get_pending_agent_action(owner_id, action_id)
+        if existing is None and not action_id:
+            existing = self.get_pending_agent_action(owner_id)
+        next_id = existing.id if existing else str(uuid.uuid4())
+        next_created_at = existing.created_at if existing else created_at
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_pending_actions(
+                    id, owner_id, capability, arguments_json, missing_json,
+                    status, summary, created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    capability = excluded.capability,
+                    arguments_json = excluded.arguments_json,
+                    missing_json = excluded.missing_json,
+                    status = excluded.status,
+                    summary = excluded.summary,
+                    updated_at = excluded.updated_at,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    next_id,
+                    owner_id,
+                    capability,
+                    _dump(arguments),
+                    _dump(missing_fields),
+                    status,
+                    summary,
+                    next_created_at,
+                    created_at,
+                    expires_at,
+                ),
+            )
+        pending = self.get_pending_agent_action(owner_id, next_id)
+        if pending is None:
+            raise NotFoundError("Pending agent action not found")
+        return pending
+
+    def mark_pending_agent_action_committed(
+        self, owner_id: str, action_id: str
+    ) -> PendingAgentActionRecord:
+        with self._connection() as connection:
+            updated = connection.execute(
+                "UPDATE agent_pending_actions SET status = 'committed', updated_at = ? "
+                "WHERE id = ? AND owner_id = ? AND status = 'prepared' "
+                "AND expires_at > ?",
+                (_now(), action_id, owner_id, _now()),
+            ).rowcount
+        if not updated:
+            raise NotFoundError("Pending agent action not found or expired")
+        pending = self.get_pending_agent_action(owner_id, action_id)
+        if pending is None:
+            # The record is now committed, so construct its committed value directly.
+            with self._connection() as connection:
+                row = connection.execute(
+                    "SELECT * FROM agent_pending_actions WHERE id = ? AND owner_id = ?",
+                    (action_id, owner_id),
+                ).fetchone()
+            if row is None:
+                raise NotFoundError("Pending agent action not found")
+            pending = self._pending_from_row(row)
+        return pending
+
+    def cancel_pending_agent_action(
+        self, owner_id: str, action_id: str = ""
+    ) -> bool:
+        with self._connection() as connection:
+            if action_id:
+                cursor = connection.execute(
+                    "UPDATE agent_pending_actions SET status = 'cancelled', updated_at = ? "
+                    "WHERE id = ? AND owner_id = ? AND status IN ('collecting', 'prepared')",
+                    (_now(), action_id, owner_id),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE agent_pending_actions SET status = 'cancelled', updated_at = ? "
+                    "WHERE owner_id = ? AND status IN ('collecting', 'prepared')",
+                    (_now(), owner_id),
+                )
+        return bool(cursor.rowcount)
+
     def create_batch(self, owner_id: str, request: BatchCreateRequest) -> BatchResponse:
-        self.require_profile(request.profile_id, owner_id)
+        from app.services.domain_store import DomainStore
+
+        domain = DomainStore(self.path)
+        if request.background_instance_id:
+            background = domain.get_background(
+                owner_id,
+                request.background_instance_id,
+            )
+            profile_id = request.profile_id or background.legacy_profile_id
+            if not profile_id:
+                profile_id = self.save_profile(
+                    owner_id,
+                    background.profile,
+                ).id
+            self.require_profile(profile_id, owner_id)
+        else:
+            profile = self.require_profile(request.profile_id, owner_id)
+            background = domain.ensure_background_for_profile(
+                owner_id,
+                profile.id,
+                profile.profile,
+            )
+            profile_id = profile.id
+        execution_mode = (
+            "instance" if request.background_instance_id else "legacy"
+        )
         batch_id = str(uuid.uuid4())
         now = _now()
         request_json = _dump(request)
@@ -222,12 +463,22 @@ class SQLiteStore:
             inserted = connection.execute(
                 """
                 INSERT OR IGNORE INTO batches(
-                    id, owner_id, profile_id, request_id, request_json,
-                    tone, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    id, owner_id, profile_id, background_id, execution_mode,
+                    request_id, request_json, tone, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
-                (batch_id, owner_id, request.profile_id, request.request_id,
-                 request_json, request.tone, now, now),
+                (
+                    batch_id,
+                    owner_id,
+                    profile_id,
+                    background.id,
+                    execution_mode,
+                    request.request_id,
+                    request_json,
+                    request.tone,
+                    now,
+                    now,
+                ),
             ).rowcount
             if not inserted:
                 existing = connection.execute(
@@ -260,11 +511,21 @@ class SQLiteStore:
                             """
                             INSERT INTO batch_items(
                                 id, batch_id, direction_index, item_index,
-                                program_json, status, stage
-                            ) VALUES (?, ?, ?, ?, ?, 'pending', 'pending')
+                                program_json, status, stage, background_id,
+                                application_project_id, story_ids_json, tone
+                            ) VALUES (?, ?, ?, ?, ?, 'pending', 'pending', ?, ?, ?, ?)
                             """,
-                            (str(uuid.uuid4()), batch_id, direction_index,
-                             item_index, _dump(program)),
+                            (
+                                str(uuid.uuid4()),
+                                batch_id,
+                                direction_index,
+                                item_index,
+                                _dump(program),
+                                background.id,
+                                direction.application_project_id,
+                                _dump(direction.story_instance_ids),
+                                essay.tone or request.tone,
+                            ),
                         )
                         item_index += 1
         return self.batch_snapshot(batch_id, owner_id)
@@ -279,20 +540,29 @@ class SQLiteStore:
                 return None
             items = connection.execute(
                 """
-                SELECT i.*, s.draft FROM batch_items i
+                SELECT i.*, COALESCE(i.draft, s.draft) AS resolved_draft
+                FROM batch_items i
                 LEFT JOIN sessions s ON s.id = i.session_id AND s.owner_id = ?
                 WHERE i.batch_id = ? ORDER BY i.item_index
                 """,
                 (owner_id, batch_id),
             ).fetchall()
         return BatchResponse(
-            id=row["id"], profile_id=row["profile_id"], tone=row["tone"],
+            id=row["id"], profile_id=row["profile_id"],
+            background_instance_id=row["background_id"],
+            execution_mode=row["execution_mode"] or "legacy",
+            tone=row["tone"],
             status=row["status"], created_at=row["created_at"], updated_at=row["updated_at"],
             items=[BatchItemResponse(
                 id=item["id"], direction_index=item["direction_index"],
                 program=ProgramContext.model_validate_json(item["program_json"]),
                 status=item["status"], stage=item["stage"],
-                session_id=item["session_id"], draft=item["draft"],
+                session_id=item["session_id"], project_id=item["project_id"],
+                application_project_id=item["application_project_id"],
+                background_instance_id=item["background_id"],
+                story_instance_ids=json.loads(item["story_ids_json"] or "[]"),
+                tone=item["tone"] or "balanced",
+                draft=item["resolved_draft"],
                 error_code=item["error_code"], error_message=item["error_message"],
             ) for item in items],
         )
@@ -343,7 +613,20 @@ class SQLiteStore:
     def update_batch_item(
         self, batch_id: str, item_id: str, owner_id: str, **changes: Any
     ) -> None:
-        allowed = {"status", "stage", "analysis_id", "session_id", "error_code", "error_message"}
+        allowed = {
+            "status",
+            "stage",
+            "analysis_id",
+            "session_id",
+            "project_id",
+            "application_project_id",
+            "background_id",
+            "story_ids_json",
+            "tone",
+            "draft",
+            "error_code",
+            "error_message",
+        }
         if not changes or not set(changes) <= allowed:
             raise ValueError("Invalid batch item update")
         with self._connection() as connection:
@@ -856,6 +1139,9 @@ def configure_store(path: Path | str | None = None) -> SQLiteStore:
     global _store
     target = Path(path) if path else get_settings().resolved_database_path
     _store = SQLiteStore(target)
+    from app.services.domain_store import configure_domain_store
+
+    configure_domain_store(target)
     return _store
 
 

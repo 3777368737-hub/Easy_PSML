@@ -11,7 +11,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:agent": "node scripts/check-agent-capabilities.mjs"
   },
   "dependencies": {
     "next": "16.4.6",

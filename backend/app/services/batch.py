@@ -51,6 +51,10 @@ async def _process_item(owner_id: str, batch: BatchResponse, item_id: str) -> No
         batch.id, item_id, owner_id, status="running", error_code=None, error_message=None,
     )
 
+    if batch.execution_mode == "instance":
+        await _process_instance_item(owner_id, batch, item, state)
+        return
+
     analysis_id = state["analysis_id"]
     if not analysis_id:
         store.update_batch_item(batch.id, item_id, owner_id, stage="analysis")
@@ -110,7 +114,88 @@ async def _process_item(owner_id: str, batch: BatchResponse, item_id: str) -> No
             owner_id,
             DraftRequest(session_id=session_id, tone=batch.tone),
         )
-    store.update_batch_item(batch.id, item_id, owner_id, status="completed", stage="completed")
+    session = store.require_session(session_id, owner_id)
+    store.update_batch_item(
+        batch.id,
+        item_id,
+        owner_id,
+        status="completed",
+        stage="completed",
+        draft=session.draft,
+    )
+
+
+async def _process_instance_item(
+    owner_id: str,
+    batch: BatchResponse,
+    item: Any,
+    state: Dict[str, Any],
+) -> None:
+    from app.schemas import EssayProjectDraftRequest
+    from app.services import domain_workflow
+    from app.services.domain_store import DomainStore
+
+    store = get_store()
+    domain = DomainStore(store.path)
+    background_id = item.background_instance_id or state.get("background_id")
+    if not background_id:
+        raise AppError(
+            "Batch item is missing its background instance",
+            code="batch_background_missing",
+        )
+    project_id = state.get("project_id")
+    if not project_id:
+        project = domain.create_project(
+            owner_id,
+            background_id,
+            item.story_instance_ids,
+            item.program,
+            application_project_id=item.application_project_id,
+        )
+        project_id = project.id
+        store.update_batch_item(
+            batch.id,
+            item.id,
+            owner_id,
+            project_id=project_id,
+            background_id=background_id,
+        )
+    project = domain.get_project(owner_id, project_id)
+
+    if project.analysis is None:
+        store.update_batch_item(batch.id, item.id, owner_id, stage="analysis")
+        model_rate_limiter.check(owner_id)
+        project = await domain_workflow.analyze_project(
+            owner_id,
+            project_id,
+            store=domain,
+        )
+    if project.outline is None:
+        store.update_batch_item(batch.id, item.id, owner_id, stage="outline")
+        model_rate_limiter.check(owner_id)
+        project = await domain_workflow.generate_outline(
+            owner_id,
+            project_id,
+            store=domain,
+        )
+    if not project.draft:
+        store.update_batch_item(batch.id, item.id, owner_id, stage="draft")
+        model_rate_limiter.check(owner_id)
+        project = await domain_workflow.generate_draft(
+            owner_id,
+            project_id,
+            EssayProjectDraftRequest(tone=item.tone),
+            store=domain,
+        )
+    store.update_batch_item(
+        batch.id,
+        item.id,
+        owner_id,
+        status="completed",
+        stage="completed",
+        project_id=project.id,
+        draft=project.draft,
+    )
 
 
 async def process_batch(owner_id: str, batch_id: str) -> None:

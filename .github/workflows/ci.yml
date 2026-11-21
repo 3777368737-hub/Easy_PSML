@@ -48,6 +48,10 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
+      - name: Check Agent capability coverage
+        working-directory: frontend
+        run: npm run check:agent
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build

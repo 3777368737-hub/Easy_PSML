@@ -39,6 +39,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname()?.replace(/\/$/, "") || "/";
   const current = steps.findIndex((step) => step.href === pathname);
   const isBatch = pathname === "/batch";
+  const isLibrary = pathname === "/library";
   return (
     <div className="app-shell">
       <a href="#main-content" className="skip-link">
@@ -84,6 +85,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <span>批量生成</span>
             <span className="nav-index">PS/ML</span>
           </Link>
+          <Link
+            href="/library"
+            className={`nav-item ${isLibrary ? "active" : ""}`}
+            aria-current={isLibrary ? "page" : undefined}
+          >
+            <Icon name="book" />
+            <span>装配工作台</span>
+            <span className="nav-index">BUILD</span>
+          </Link>
         </nav>
         <div className="sidebar-note">
           <Icon name="spark" />
@@ -102,7 +112,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <div className="breadcrumb">
             我的工作空间 <span>/</span>{" "}
             <strong>
-              {isBatch ? "批量生成" : current < 0 ? "申请概览" : steps[current].title}
+              {isBatch
+                ? "批量生成"
+                : isLibrary
+                  ? "装配工作台"
+                  : current < 0
+                    ? "申请概览"
+                    : steps[current].title}
             </strong>
           </div>
           <span className="header-tag">

@@ -14,8 +14,10 @@ import {
 import type {
   ActivityAward,
   ExperienceItem,
+  PersonSummary,
   ProfileData,
   ProfileResponse,
+  WorkspaceSnapshot,
 } from "@/lib/types";
 
 type ProfileForm = {
@@ -140,11 +142,17 @@ function toFormData(
   form: ProfileForm,
   file: File | null,
   strictProfile: boolean,
+  personId: string,
+  backgroundId: string,
+  resumeName: string,
 ): FormData {
   const data = new FormData();
   Object.entries(form).forEach(([key, value]) => data.append(key, value));
   if (file) data.append("resume_file", file);
   data.append("strict_profile", strictProfile ? "true" : "false");
+  if (personId) data.append("person_id", personId);
+  if (backgroundId) data.append("background_instance_id", backgroundId);
+  if (resumeName.trim()) data.append("resume_name", resumeName.trim());
   return data;
 }
 
@@ -157,6 +165,10 @@ export default function ProfilePage() {
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>({});
   const [file, setFile] = useState<File | null>(null);
   const [form, setForm] = useState<ProfileForm>(initialForm);
+  const [people, setPeople] = useState<PersonSummary[]>([]);
+  const [personId, setPersonId] = useState("");
+  const [backgroundId, setBackgroundId] = useState("");
+  const [resumeName, setResumeName] = useState("默认简历");
 
   useEffect(() => {
     const draft = loadState<ProfileForm>(STORAGE_KEYS.profileDraft);
@@ -166,6 +178,40 @@ export default function ProfilePage() {
     if (draft) setForm({ ...initialForm, ...draft });
     else if (saved?.profile)
       setForm((current) => applyProfileToForm(current, saved.profile));
+    setPersonId(saved?.person_id || "");
+    setBackgroundId(saved?.background_instance_id || "");
+
+    async function loadWorkspace() {
+      try {
+        const workspace = await apiFetch<WorkspaceSnapshot>("/api/workspace");
+        setPeople(workspace.persons);
+        const background = workspace.backgrounds.find(
+          (item) =>
+            item.id ===
+            (saved?.background_instance_id ||
+              loadState<string>(STORAGE_KEYS.activeBackgroundId)),
+        );
+        if (background) {
+          setPersonId(background.person_id);
+          setBackgroundId(background.id);
+          setResumeName(background.resume_name);
+          setForm(applyProfileToForm(initialForm, background.profile));
+          saveState(
+            STORAGE_KEYS.profile,
+            {
+              profile_id: background.legacy_profile_id || "",
+              profile: background.profile,
+              person_id: background.person_id,
+              background_instance_id: background.id,
+              background_version: background.version,
+            } satisfies ProfileResponse,
+          );
+        }
+      } catch {
+        // Instance metadata is optional for the legacy single-profile flow.
+      }
+    }
+    void loadWorkspace();
   }, []);
 
   function update(name: keyof ProfileForm, value: string) {
@@ -232,6 +278,10 @@ export default function ProfilePage() {
   }
 
   async function parseResume() {
+    if (!resumeName.trim()) {
+      setError("请填写简历实例名称。");
+      return;
+    }
     const fileError = validateFile(file);
     if (fileError) {
       setError(fileError);
@@ -244,12 +294,30 @@ export default function ProfilePage() {
     try {
       const result = await apiFetch<ProfileResponse>("/api/profile/extract", {
         method: "POST",
-        body: toFormData(form, file, false),
+        body: toFormData(
+          form,
+          file,
+          false,
+          personId,
+          backgroundId,
+          resumeName,
+        ),
       });
       clearDownstreamState();
       setForm((current) => applyProfileToForm(current, result.profile));
       setFieldErrors({});
       saveState(STORAGE_KEYS.profile, result);
+      if (result.person_id) {
+        setPersonId(result.person_id);
+        saveState(STORAGE_KEYS.activePersonId, result.person_id);
+      }
+      if (result.background_instance_id) {
+        setBackgroundId(result.background_instance_id);
+        saveState(
+          STORAGE_KEYS.activeBackgroundId,
+          result.background_instance_id,
+        );
+      }
       removeState(STORAGE_KEYS.profileDraft);
       setNotice("简历解析完成，已回填。请核对内容后继续。");
     } catch (err) {
@@ -271,6 +339,10 @@ export default function ProfilePage() {
       setError(fileError);
       return;
     }
+    if (!resumeName.trim()) {
+      setError("请填写简历实例名称。");
+      return;
+    }
     const validationErrors = validateRequiredFields();
     if (Object.keys(validationErrors).length > 0) {
       setFieldErrors(validationErrors);
@@ -287,10 +359,26 @@ export default function ProfilePage() {
     try {
       const result = await apiFetch<ProfileResponse>("/api/profile/extract", {
         method: "POST",
-        body: toFormData(form, file, true),
+        body: toFormData(
+          form,
+          file,
+          true,
+          personId,
+          backgroundId,
+          resumeName,
+        ),
       });
       clearDownstreamState();
       saveState(STORAGE_KEYS.profile, result);
+      if (result.person_id) {
+        saveState(STORAGE_KEYS.activePersonId, result.person_id);
+      }
+      if (result.background_instance_id) {
+        saveState(
+          STORAGE_KEYS.activeBackgroundId,
+          result.background_instance_id,
+        );
+      }
       removeState(STORAGE_KEYS.profileDraft);
       router.push(destination);
     } catch (err) {
@@ -324,6 +412,62 @@ export default function ProfilePage() {
             ) : null}
 
             <form onSubmit={handleSubmit} noValidate>
+              <div className="mini-card" style={{ marginBottom: 16 }}>
+                <h2>
+                  <Icon name="user" /> 人物与简历实例
+                </h2>
+                <p className="muted">
+                  同一个人可以保存多份不同简历；后续故事和文书会引用这里选择的背景实例。
+                </p>
+                <div className="grid-2">
+                  <div className="field">
+                    <label htmlFor="profile-person">归属人物</label>
+                    <select
+                      id="profile-person"
+                      value={personId}
+                      onChange={(event) => {
+                        const nextPersonId = event.target.value;
+                        setPersonId(nextPersonId);
+                        setBackgroundId("");
+                        const person = people.find(
+                          (item) => item.id === nextPersonId,
+                        );
+                        if (person) {
+                          setForm((current) => ({
+                            ...current,
+                            full_name: person.display_name,
+                          }));
+                        }
+                      }}
+                    >
+                      <option value="">新建人物，使用下方姓名</option>
+                      {people.map((person) => (
+                        <option key={person.id} value={person.id}>
+                          {person.display_name}（{person.background_count} 份简历）
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="profile-resume-name">
+                      简历实例名称<span className="required-mark">必填</span>
+                    </label>
+                    <input
+                      id="profile-resume-name"
+                      maxLength={160}
+                      value={resumeName}
+                      onChange={(event) => setResumeName(event.target.value)}
+                      placeholder="例如：科研简历 / 互联网简历"
+                    />
+                  </div>
+                </div>
+                {backgroundId ? (
+                  <p className="muted">
+                    当前会更新已有的背景实例；如需保留旧版本，请新建一份简历名称。
+                  </p>
+                ) : null}
+              </div>
+
               <div className="upload-panel">
                 <h2>
                   <Icon name="upload" /> 从一份简历开始
@@ -365,6 +509,7 @@ export default function ProfilePage() {
                   <button
                     className="btn-secondary"
                     type="button"
+                    data-agent-capability="profile.parse_resume"
                     onClick={parseResume}
                     disabled={parsingResume || loading || !file}
                   >
@@ -632,6 +777,7 @@ export default function ProfilePage() {
                 <button
                   className="btn-secondary"
                   type="button"
+                  data-agent-capability="profile.save_draft"
                   disabled={loading || parsingResume}
                   onClick={() => {
                     setError("");
@@ -650,6 +796,7 @@ export default function ProfilePage() {
                   className="btn-secondary"
                   type="submit"
                   value="batch"
+                  data-agent-capability="profile.continue_batch"
                   disabled={loading || parsingResume}
                 >
                   {loading ? "正在生成申请画像..." : "继续：批量生成"}
@@ -657,6 +804,7 @@ export default function ProfilePage() {
                 <button
                   className="btn"
                   type="submit"
+                  data-agent-capability="profile.continue_program"
                   disabled={loading || parsingResume}
                 >
                   {loading ? "正在生成申请画像..." : "继续：项目分析"}

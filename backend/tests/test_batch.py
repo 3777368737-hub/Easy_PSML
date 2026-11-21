@@ -150,9 +150,6 @@ class BatchValidationTests(unittest.TestCase):
         payload = batch_payload()
         payload["directions"] = []
         cases.append(("no directions", payload))
-        payload = batch_payload()
-        payload["directions"] *= 3
-        cases.append(("more than five directions", payload))
         for field in ("school_name", "program_name"):
             payload = batch_payload()
             payload["directions"][0][field] = "   "
@@ -179,15 +176,20 @@ class BatchValidationTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(ValidationError):
                 BatchCreateRequest.model_validate(candidate)
 
-    def test_one_essay_and_maximum_ten_outputs_are_supported(self) -> None:
+    def test_one_essay_and_variable_direction_counts_are_supported(self) -> None:
         payload = batch_payload()
         payload["directions"] = [payload["directions"][0]]
         payload["directions"][0]["essays"] = [payload["directions"][0]["essays"][1]]
         self.assertEqual(len(BatchCreateRequest.model_validate(payload).directions), 1)
         payload = batch_payload()
-        payload["directions"] = [copy.deepcopy(payload["directions"][0]) for _ in range(5)]
+        payload["directions"] = [
+            copy.deepcopy(payload["directions"][0]) for _ in range(8)
+        ]
         request = BatchCreateRequest.model_validate(payload)
-        self.assertEqual(sum(len(direction.essays) for direction in request.directions), 10)
+        self.assertEqual(
+            sum(len(direction.essays) for direction in request.directions),
+            16,
+        )
 
 
 class BatchWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -222,6 +224,16 @@ class BatchWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.client_patch.start()
         self.limiter_patch = patch.object(batch.model_rate_limiter, "check")
         self.limiter = self.limiter_patch.start()
+
+    def test_batch_supports_more_than_five_directions(self) -> None:
+        payload = batch_payload(self.profile.id)
+        payload["directions"] = [
+            copy.deepcopy(payload["directions"][0]) for _ in range(7)
+        ]
+        request = BatchCreateRequest.model_validate(payload)
+        response = self.store.create_batch(OWNER_A, request)
+        self.assertEqual(len(response.items), 14)
+        self.assertEqual(response.items[-1].direction_index, 6)
 
     def tearDown(self) -> None:
         self.limiter_patch.stop()
