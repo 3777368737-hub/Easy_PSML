@@ -10,6 +10,7 @@ export const STORAGE_KEYS = {
   batchSubmission: "gradpilot_batch_submission",
   batchId: "gradpilot_batch_id",
   voiceButtonPosition: "gradpilot_voice_button_position",
+  voiceSpeechEnabled: "gradpilot_voice_speech_enabled",
   agentHistory: "gradpilot_agent_history",
   activePersonId: "gradpilot_active_person_id",
   activeBackgroundId: "gradpilot_active_background_id",

@@ -831,6 +831,7 @@ export default function WorkbenchPage() {
             <button
               className="btn"
               type="button"
+              data-agent-capability="library.generate_all"
               disabled={Boolean(busy) || !assemblyRoot?.projects.length}
               onClick={() => void generateAll()}
             >
@@ -877,8 +878,10 @@ export default function WorkbenchPage() {
               </div>
               <span className="badge">{backgrounds.length}</span>
             </div>
-            <details>
-              <summary>新建人物与简历背景</summary>
+            <details id="background-source-form" data-agent-section="background-source-form">
+              <summary data-agent-key="background-source-form">
+                新建人物与简历背景
+              </summary>
               <div className="field">
                 <label htmlFor="workbench-person">人物</label>
                 <div className="actions">
@@ -902,6 +905,7 @@ export default function WorkbenchPage() {
                   </select>
                   <input
                     aria-label="新人物姓名"
+                    data-agent-autofocus="true"
                     value={personName}
                     onChange={(event) => setPersonName(event.target.value)}
                     placeholder="新人物姓名"
@@ -909,6 +913,7 @@ export default function WorkbenchPage() {
                   <button
                     className="btn-secondary"
                     type="button"
+                    data-agent-capability="library.person.create"
                     disabled={busy === "person" || !personName.trim()}
                     onClick={() => void createPerson()}
                   >
@@ -938,6 +943,7 @@ export default function WorkbenchPage() {
               <button
                 className="btn-secondary"
                 type="button"
+                data-agent-capability="library.background.extract"
                 disabled={busy === "background" || !resumeFile}
                 onClick={() => void extractBackground()}
               >
@@ -1017,8 +1023,10 @@ export default function WorkbenchPage() {
               </div>
               <span className="badge">{applicationProjects.length}</span>
             </div>
-            <details>
-              <summary>记录学校和专业项目</summary>
+            <details id="application-project-form" data-agent-section="application-project-form">
+              <summary data-agent-key="application-project-form">
+                记录学校和专业项目
+              </summary>
               <div className="field">
                 <label htmlFor="workbench-background">绑定背景</label>
                 <select
@@ -1042,6 +1050,7 @@ export default function WorkbenchPage() {
                   <label htmlFor="workbench-school">学校</label>
                   <input
                     id="workbench-school"
+                    data-agent-autofocus="true"
                     value={projectForm.school_name}
                     onChange={(event) =>
                       setProjectForm((current) => ({
@@ -1081,6 +1090,7 @@ export default function WorkbenchPage() {
               <button
                 className="btn-secondary"
                 type="button"
+                data-agent-capability="library.application_project.create"
                 disabled={busy === "application-project"}
                 onClick={() => void createApplicationProject()}
               >
@@ -1132,12 +1142,15 @@ export default function WorkbenchPage() {
               </div>
               <span className="badge">{stories.length}</span>
             </div>
-            <details>
-              <summary>挖掘并绑定到申请项目</summary>
+            <details id="story-source-form" data-agent-section="story-source-form">
+              <summary data-agent-key="story-source-form">
+                挖掘并绑定到申请项目
+              </summary>
               <div className="field">
                 <label htmlFor="workbench-story-project">申请项目</label>
                 <select
                   id="workbench-story-project"
+                  data-agent-autofocus="true"
                   value={selectedApplicationProjectId}
                   onChange={(event) => {
                     setSelectedApplicationProjectId(event.target.value);
@@ -1175,6 +1188,7 @@ export default function WorkbenchPage() {
               <button
                 className="btn-secondary"
                 type="button"
+                data-agent-capability="library.story.create"
                 disabled={busy === "story"}
                 onClick={() => void createStory()}
               >
@@ -1221,6 +1235,8 @@ export default function WorkbenchPage() {
                   <p key={`${message.role}-${index}`}>{message.content}</p>
                 ))}
                 <textarea
+                  id="workbench-story-reply"
+                  data-agent-autofocus="true"
                   value={storyReply}
                   onChange={(event) => setStoryReply(event.target.value)}
                   placeholder="回答当前故事问题"
@@ -1229,6 +1245,7 @@ export default function WorkbenchPage() {
                 <button
                   className="btn-secondary"
                   type="button"
+                  data-agent-capability="library.story.reply"
                   disabled={busy === "story-reply" || !storyReply.trim()}
                   onClick={() => void replyStory()}
                 >

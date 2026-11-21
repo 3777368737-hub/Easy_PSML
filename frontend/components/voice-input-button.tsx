@@ -12,6 +12,7 @@ import {
   consumeAgentStream,
   executeAgentCapability,
   executeAgentUiActions,
+  focusInitialVoiceControl,
   restorePendingAgentFocus,
   type AgentStreamEvent,
   type AgentActionCommitResponse,
@@ -60,13 +61,13 @@ const BAR_PROFILE = [
 const DRAG_MARGIN = 8;
 const DRAG_THRESHOLD = 4;
 const PAGE_LABELS: Record<string, string> = {
-  "/": "申请概览",
-  "/profile": "背景信息",
+  "/": "工作台",
+  "/profile": "背景资料",
   "/program": "项目分析",
-  "/story": "故事挖掘",
-  "/result": "文书工作台",
+  "/story": "故事访谈",
+  "/result": "文书编辑",
   "/batch": "批量生成",
-  "/library": "装配工作台",
+  "/library": "申请项目",
 };
 
 function clampPosition(
@@ -125,6 +126,13 @@ export default function VoiceInputButton({
   const completedSentenceIdsRef = useRef(new Set<number>());
   const fatalRealtimeErrorRef = useRef(false);
   const skipInitialHistorySaveRef = useRef(true);
+  const introPromptedRef = useRef(false);
+  const speechActiveRef = useRef(false);
+  const speechEnabledRef = useRef(true);
+  const speakFeedbackRef = useRef<(message: string) => void>(() => undefined);
+  const lastEmptyPromptRef = useRef(0);
+  const lastPathnameRef = useRef(pathname);
+  const lastPageStatusRef = useRef("");
   const [position, setPosition] = useState<VoiceButtonPosition | null>(null);
   const [dragging, setDragging] = useState(false);
   const [state, setState] = useState<VoiceState>("idle");
@@ -138,6 +146,7 @@ export default function VoiceInputButton({
     useState<DomainAgentResponse | null>(null);
   const [domainPendingTranscript, setDomainPendingTranscript] = useState("");
   const [logMessages, setLogMessages] = useState<AgentLogMessage[]>([]);
+  const [speechEnabled, setSpeechEnabled] = useState(true);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -169,6 +178,12 @@ export default function VoiceInputButton({
       logMessagesRef.current = restoredHistory;
       setLogMessages(restoredHistory);
     }
+    const savedSpeechEnabled = loadState<boolean>(
+      STORAGE_KEYS.voiceSpeechEnabled,
+    );
+    const nextSpeechEnabled = savedSpeechEnabled ?? true;
+    speechEnabledRef.current = nextSpeechEnabled;
+    setSpeechEnabled(nextSpeechEnabled);
 
     const keepInViewport = () => {
       const currentElement = dragHandleRef.current;
@@ -190,6 +205,7 @@ export default function VoiceInputButton({
       window.removeEventListener("resize", keepInViewport);
       cleanupRef.current?.();
       cleanupRef.current = null;
+      window.speechSynthesis?.cancel();
     };
   }, []);
 
@@ -207,12 +223,57 @@ export default function VoiceInputButton({
   }, [logMessages, busy, pendingAction]);
 
   useEffect(() => {
+    const pathChanged = lastPathnameRef.current !== pathname;
+    lastPathnameRef.current = pathname;
     const timer = window.setTimeout(() => {
       setPendingAction(null);
       void restorePendingAgentFocus();
+      if (pathChanged && realtimeSessionRef.current) {
+        const label = focusInitialVoiceControl();
+        speakFeedbackRef.current(
+          label
+            ? `已进入${PAGE_LABELS[pathname] || "新页面"}。当前请填写“${label}”。`
+            : `已进入${PAGE_LABELS[pathname] || "新页面"}。请说出下一步操作。`,
+        );
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, [pathname]);
+
+  useEffect(() => {
+    const root = document.getElementById("main-content");
+    if (!root) return;
+    let timer = 0;
+    const observer = new MutationObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (!realtimeSessionRef.current) return;
+        const messages = Array.from(
+          root.querySelectorAll<HTMLElement>('[role="alert"], [role="status"]'),
+        )
+          .map((element) => element.textContent?.replace(/\s+/g, " ").trim() || "")
+          .filter(
+            (message) =>
+              message &&
+              message !== lastPageStatusRef.current &&
+              !/^(?:正在|加载中)/.test(message),
+          );
+        const latest = messages.at(-1);
+        if (!latest) return;
+        lastPageStatusRef.current = latest;
+        speakFeedbackRef.current(latest);
+      }, 160);
+    });
+    observer.observe(root, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (!panelOpen) return;
@@ -263,6 +324,63 @@ export default function VoiceInputButton({
     setLogMessages(next);
   }
 
+  function resumeInputAfterSpeech() {
+    speechActiveRef.current = false;
+    realtimeSessionRef.current?.setInputActive(true);
+  }
+
+  function speakFeedback(message: string) {
+    const text = message.trim();
+    if (
+      !speechEnabledRef.current ||
+      !text ||
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window)
+    ) {
+      return;
+    }
+    window.speechSynthesis.cancel();
+    speechActiveRef.current = true;
+    realtimeSessionRef.current?.setInputActive(false);
+    const utterance = new SpeechSynthesisUtterance(
+      text.replace(/\s+/g, " ").slice(0, 320),
+    );
+    utterance.lang = "zh-CN";
+    utterance.rate = 1.04;
+    utterance.pitch = 1;
+    let finished = false;
+    let fallbackTimer = 0;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(fallbackTimer);
+      resumeInputAfterSpeech();
+    };
+    utterance.onend = finish;
+    utterance.onerror = finish;
+    fallbackTimer = window.setTimeout(
+      finish,
+      Math.min(15000, 1800 + utterance.text.length * 90),
+    );
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      finish();
+    }
+  }
+
+  function setSpeechFeedbackEnabled(enabled: boolean) {
+    speechEnabledRef.current = enabled;
+    setSpeechEnabled(enabled);
+    saveState(STORAGE_KEYS.voiceSpeechEnabled, enabled);
+    if (!enabled) {
+      window.speechSynthesis?.cancel();
+      resumeInputAfterSpeech();
+    }
+  }
+
+  speakFeedbackRef.current = speakFeedback;
+
   function setVisualLevel(level: number) {
     const clampedLevel = Math.min(1, Math.max(0, level));
     const levelValue = clampedLevel.toFixed(3);
@@ -309,7 +427,18 @@ export default function VoiceInputButton({
       return;
     }
     const text = event.text.trim();
-    if (!text) return;
+    if (!text) {
+      if (
+        event.sentenceEnd &&
+        Date.now() - lastEmptyPromptRef.current > 4000
+      ) {
+        lastEmptyPromptRef.current = Date.now();
+        const message = "没有听清，请再说一遍当前内容。";
+        setStatusMessage(message);
+        speakFeedback(message);
+      }
+      return;
+    }
     let live = liveUtteranceRef.current;
     if (!live || live.sentenceId !== event.sentenceId) {
       live = {
@@ -358,6 +487,17 @@ export default function VoiceInputButton({
         ).toFixed(1)} 秒后自动发送`,
       );
       onListeningChange?.(true);
+      if (!introPromptedRef.current) {
+        introPromptedRef.current = true;
+        window.setTimeout(() => {
+          const label = focusInitialVoiceControl();
+          speakFeedback(
+            label
+              ? `语音已开启。当前请填写“${label}”，直接说出内容即可。`
+              : "语音已开启。请说出下一步操作。",
+          );
+        }, 120);
+      }
       return;
     }
     if (event.type === "transcript") {
@@ -374,6 +514,7 @@ export default function VoiceInputButton({
       realtimeSessionRef.current = null;
       cleanupRef.current = null;
       liveUtteranceRef.current = null;
+      introPromptedRef.current = false;
       setVisualLevel(0);
       onListeningChange?.(false);
       if (fatalRealtimeErrorRef.current) return;
@@ -399,6 +540,7 @@ export default function VoiceInputButton({
         setState("error");
         setStatusMessage(message);
         appendLog("system", `${message}，可以在下方直接输入指令。`);
+        speakFeedback(`${message}。请检查麦克风权限后重新打开语音。`);
       } else {
         setState("requesting");
         setStatusMessage("实时语音连接波动，正在自动恢复");
@@ -518,6 +660,7 @@ export default function VoiceInputButton({
       setState("error");
       setStatusMessage(message);
       appendLog("system", `${message}，可以在下方直接输入指令。`);
+      speakFeedback(`${message}。请检查浏览器权限后重试。`);
     }
   }
 
@@ -547,12 +690,46 @@ export default function VoiceInputButton({
   }
 
   async function submitRecognizedTranscript(transcript: string) {
+    const normalizedCommand = transcript.replace(/\s+/g, "");
+    if (/关闭语音播报|不要朗读|别读了|停止播报/.test(normalizedCommand)) {
+      setSpeechFeedbackEnabled(false);
+      appendLog("system", "已关闭语音播报。");
+      return;
+    }
+    if (/打开语音播报|开启语音播报|开始朗读/.test(normalizedCommand)) {
+      setSpeechFeedbackEnabled(true);
+      appendLog("system", "已开启语音播报。");
+      speakFeedback("语音播报已开启。");
+      return;
+    }
+    if (/停止聆听|关闭麦克风/.test(normalizedCommand)) {
+      appendLog("system", "已停止持续语音识别。");
+      stopListening();
+      return;
+    }
+    if (/关闭语音助手|退出语音/.test(normalizedCommand)) {
+      appendLog("system", "已关闭语音助手。");
+      stopListening();
+      setPanelOpen(false);
+      return;
+    }
     if (domainPending) {
-      if (/确认|执行|继续/.test(transcript)) {
+      if (/重复|再说|没听清|没听懂|你说什么/.test(transcript)) {
+        appendLog("assistant", domainPending.message);
+        speakFeedback(domainPending.message);
+        return;
+      }
+      if (/怎么办|下一步|帮帮我/.test(transcript)) {
+        const message = `${domainPending.message} 请继续补充信息，或说“取消”。`;
+        appendLog("assistant", message);
+        speakFeedback(message);
+        return;
+      }
+      if (/确认|确定|执行|继续|好的|可以|是的|没问题/.test(transcript)) {
         await confirmDomainAction();
         return;
       }
-      if (/取消|不要|停止/.test(transcript)) {
+      if (/取消|不要|不用|停止|算了|不执行/.test(transcript)) {
         cancelDomainAction();
         return;
       }
@@ -601,6 +778,9 @@ export default function VoiceInputButton({
         "system",
         readableError(error, "语音指令执行失败，可以继续说话或改用文字。"),
       );
+      speakFeedback(
+        readableError(error, "语音指令执行失败，请再说一次。"),
+      );
     }
   }
 
@@ -617,6 +797,7 @@ export default function VoiceInputButton({
         { confirmed, source },
       );
       appendLog("assistant", response.message);
+      speakFeedback(response.message);
       applyDomainResolved(response.resolved);
       if (response.status === "confirmation_required") {
         setDomainPending(response);
@@ -634,10 +815,15 @@ export default function VoiceInputButton({
         );
       }
     } catch (error) {
+      const message = readableError(
+        error,
+        "实例操作失败，请检查人物和背景名称。",
+      );
       appendLog(
         "system",
-        readableError(error, "实例操作失败，请检查人物和背景名称。"),
+        message,
       );
+      speakFeedback(message);
     }
   }
 
@@ -650,6 +836,7 @@ export default function VoiceInputButton({
     } else {
       appendLog("assistant", response.message);
     }
+    speakFeedback(response.message);
     setPendingAction(response.pending_action);
 
     if (response.ui_actions.length) {
@@ -731,7 +918,9 @@ export default function VoiceInputButton({
       );
       await handleAgentResponse(finalResponse, assistantLogId);
     } catch (error) {
-      appendLog("system", readableError(error, "文字指令执行失败。"));
+      const message = readableError(error, "文字指令执行失败。");
+      appendLog("system", message);
+      speakFeedback(message);
     } finally {
       setBusy(false);
       if (realtimeSessionRef.current) {
@@ -780,7 +969,9 @@ export default function VoiceInputButton({
         execution.ok ? "已确认并在页面中执行操作。" : execution.message,
       );
     } catch (error) {
-      appendLog("system", readableError(error, "确认执行失败。"));
+      const message = readableError(error, "确认执行失败。");
+      appendLog("system", message);
+      speakFeedback(message);
     } finally {
       setBusy(false);
       if (realtimeSessionRef.current) {
@@ -798,7 +989,9 @@ export default function VoiceInputButton({
       await apiFetch(`/api/agent/actions/${actionId}`, { method: "DELETE" });
       appendLog("system", "已取消待执行操作。");
     } catch (error) {
-      appendLog("system", readableError(error, "取消操作失败。"));
+      const message = readableError(error, "取消操作失败。");
+      appendLog("system", message);
+      speakFeedback(message);
     }
   }
 
@@ -806,6 +999,7 @@ export default function VoiceInputButton({
     setDomainPending(null);
     setDomainPendingTranscript("");
     appendLog("system", "已取消实例操作。");
+    speakFeedback("已取消实例操作。");
   }
 
   async function confirmDomainAction() {
@@ -925,10 +1119,25 @@ export default function VoiceInputButton({
               <button
                 type="button"
                 className="voice-agent-icon-button"
+                aria-label={speechEnabled ? "关闭语音播报" : "开启语音播报"}
+                aria-pressed={speechEnabled}
+                title={speechEnabled ? "关闭语音播报" : "开启语音播报"}
+                onClick={() => setSpeechFeedbackEnabled(!speechEnabled)}
+              >
+                <Icon
+                  name={speechEnabled ? "volume" : "volume-off"}
+                  size={17}
+                />
+              </button>
+              <button
+                type="button"
+                className="voice-agent-icon-button"
                 aria-label="关闭语音操作助手"
                 title="关闭"
                 onClick={() => {
                   if (realtimeSessionRef.current) stopListening();
+                  window.speechSynthesis?.cancel();
+                  speechActiveRef.current = false;
                   setPanelOpen(false);
                 }}
               >

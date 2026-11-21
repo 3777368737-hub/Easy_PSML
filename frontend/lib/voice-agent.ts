@@ -75,6 +75,7 @@ export type AgentPageContext = {
   title: string;
   stage: string;
   summary: string;
+  focused_control_key: string;
   controls: AgentControl[];
   workflow: AgentWorkflowStep[];
   boundaries: string[];
@@ -165,7 +166,7 @@ export const AGENT_WORKFLOW: AgentWorkflowStep[] = [
   {
     key: "profile",
     path: "/profile",
-    title: "背景信息",
+    title: "背景资料",
     summary:
       "收集姓名、学校、专业、目标学位/方向/国家，以及可选经历、动机和职业目标。必填项完成后才能继续。",
     fields: [
@@ -204,7 +205,7 @@ export const AGENT_WORKFLOW: AgentWorkflowStep[] = [
   {
     key: "story",
     path: "/story",
-    title: "故事挖掘",
+    title: "故事访谈",
     summary:
       "围绕当前三个问题回答故事细节；回答会更新故事素材卡，三轮完成后进入结果页。",
     fields: ["story-answer"],
@@ -212,7 +213,7 @@ export const AGENT_WORKFLOW: AgentWorkflowStep[] = [
   {
     key: "result",
     path: "/result",
-    title: "文书工作台",
+    title: "文书编辑",
     summary:
       "生成中文大纲、英文草稿、审核草稿并按修改意见重写；可切换版本和历史会话。",
     fields: ["revision-instruction"],
@@ -265,12 +266,12 @@ const PAGE_META: Record<
 > = {
   "/": {
     stage: "overview",
-    title: "申请概览",
-    summary: "查看 GradPilot 申请流程入口并前往对应页面。",
+    title: "工作台",
+    summary: "查看当前申请进度并继续下一步。",
   },
   "/profile": {
     stage: "profile",
-    title: "背景信息",
+    title: "背景资料",
     summary: "填写申请画像，保存草稿或继续到项目分析/批量生成。",
   },
   "/program": {
@@ -280,12 +281,12 @@ const PAGE_META: Record<
   },
   "/story": {
     stage: "story",
-    title: "故事挖掘",
+    title: "故事访谈",
     summary: "回答故事访谈问题并查看已整理的故事素材。",
   },
   "/result": {
     stage: "result",
-    title: "文书工作台",
+    title: "文书编辑",
     summary: "生成、查看、审核和修改当前文书。",
   },
   "/batch": {
@@ -295,12 +296,13 @@ const PAGE_META: Record<
   },
   "/library": {
     stage: "library",
-    title: "装配工作台",
-    summary: "三表拖拽装配人物背景、申请项目和故事。",
+    title: "申请项目",
+    summary: "管理背景、申请项目、故事和文书分支。",
   },
 };
 
 const PENDING_FOCUS_KEY = "gradpilot_agent_pending_focus";
+const AGENT_UNDO_KEY = "gradpilot_agent_undo_stack";
 const SAFE_BUTTON_PATTERN =
   /返回|上一页|下一步|进入|前往|去生成结果|查看|切换|加载|保存草稿|添加|移除|刷新|重新连接|打开|关闭|展开|收起/;
 const CONFIRM_BUTTON_PATTERN =
@@ -370,6 +372,7 @@ function controlKey(element: HTMLElement, kind: AgentControlKind, index: number)
 }
 
 function controlKind(element: HTMLElement): AgentControlKind | null {
+  if (element.tagName === "SUMMARY") return "button";
   if (element instanceof HTMLTextAreaElement) return "textarea";
   if (element instanceof HTMLSelectElement) return "select";
   if (element instanceof HTMLButtonElement) return "button";
@@ -556,7 +559,7 @@ export function capturePageContext(): AgentPageContext {
   const elements = root
     ? Array.from(
         root.querySelectorAll<HTMLElement>(
-          "input, textarea, select, button, a[href]",
+          "input, textarea, select, button, summary, a[href]",
         ),
       )
     : [];
@@ -643,6 +646,12 @@ export function capturePageContext(): AgentPageContext {
     title: normalizeText(heading?.textContent) || meta.title,
     stage: meta.stage,
     summary: meta.summary,
+    focused_control_key:
+      controls.find(
+        (control) =>
+          document.activeElement?.getAttribute("data-agent-control-id") ===
+          control.id,
+      )?.key || "",
     controls,
     workflow: AGENT_WORKFLOW,
     boundaries: AGENT_BOUNDARIES,
@@ -651,13 +660,15 @@ export function capturePageContext(): AgentPageContext {
     page_data: {
       profile_form: profileForm,
       program_form: programForm,
-      resume_selected:
-        controls.some(
-          (control) => control.key === "resume-file" && Boolean(control.value),
-        ),
+      resume_selected: controls.some(
+        (control) => control.kind === "file" && Boolean(control.value),
+      ),
       resume_name:
-        controls.find((control) => control.key === "resume-file")?.value || "",
+        controls.find(
+          (control) => control.kind === "file" && Boolean(control.value),
+        )?.value || "",
       story_answer: values["story-answer"] || "",
+      library_story_reply: values["workbench-story-reply"] || "",
       revision_instruction: values["revision-instruction"] || "",
       batch_form: compactBatchForm(
         loadState<Record<string, unknown>>(STORAGE_KEYS.batchForm),
@@ -677,6 +688,73 @@ function findControl(targetId?: string | null): HTMLElement | null {
   return document.querySelector<HTMLElement>(
     `[data-agent-control-id="${CSS.escape(targetId)}"]`,
   );
+}
+
+type AgentUndoEntry = {
+  key: string;
+  previousValue: string;
+  nextValue: string;
+};
+
+let undoingAgentEdit = false;
+
+function readUndoStack(): AgentUndoEntry[] {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(AGENT_UNDO_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.slice(-20) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeUndoStack(entries: AgentUndoEntry[]) {
+  try {
+    sessionStorage.setItem(AGENT_UNDO_KEY, JSON.stringify(entries.slice(-20)));
+  } catch {
+    // The current page can still continue without persisted undo history.
+  }
+}
+
+function recordAgentEdit(key: string, previousValue: string, nextValue: string) {
+  if (undoingAgentEdit || !key || previousValue === nextValue) return;
+  writeUndoStack([
+    ...readUndoStack(),
+    { key, previousValue, nextValue },
+  ]);
+}
+
+function findControlByKey(key: string): HTMLElement | null {
+  const context = capturePageContext();
+  const control = context.controls.find((item) => item.key === key);
+  return findControl(control?.id);
+}
+
+export function undoLastAgentEdit(): {
+  ok: boolean;
+  message: string;
+} {
+  const stack = readUndoStack();
+  const entry = stack.pop();
+  if (!entry) {
+    return { ok: false, message: "当前没有可以撤销的语音填写。" };
+  }
+  const element = findControlByKey(entry.key);
+  if (!element) {
+    writeUndoStack(stack);
+    return {
+      ok: false,
+      message: "上一次修改不在当前页面，无法直接撤销。",
+    };
+  }
+  undoingAgentEdit = true;
+  const restored = fillControl(element, entry.previousValue);
+  undoingAgentEdit = false;
+  if (!restored) {
+    return { ok: false, message: "这个字段无法自动撤销。" };
+  }
+  writeUndoStack(stack);
+  flashAndFocus(element);
+  return { ok: true, message: "已撤销上一次语音填写。" };
 }
 
 function flashAndFocus(element: HTMLElement) {
@@ -770,12 +848,30 @@ export function executeAgentAction(
     return { ok: true, message: "已定位到目标输入框。" };
   }
 
-  if (action.type === "fill") {
-    if (action.value === null || action.value === undefined) {
-      return { ok: false, message: "缺少需要填写的内容。" };
-    }
-    const filled = fillControl(element, action.value);
-    if (filled) flashAndFocus(element);
+    if (action.type === "fill") {
+      if (action.value === null || action.value === undefined) {
+        return { ok: false, message: "缺少需要填写的内容。" };
+      }
+      const previousValue =
+        element instanceof HTMLInputElement &&
+        element.type === "checkbox"
+          ? element.checked
+            ? "true"
+            : "false"
+          : element instanceof HTMLInputElement ||
+              element instanceof HTMLTextAreaElement ||
+              element instanceof HTMLSelectElement
+            ? element.value
+            : "";
+      const filled = fillControl(element, action.value);
+      if (filled) {
+        recordAgentEdit(
+          action.target_key || action.target_id || "",
+          previousValue,
+          action.value,
+        );
+        flashAndFocus(element);
+      }
     return filled
       ? { ok: true, message: "已填写并定位到目标输入框。" }
       : { ok: false, message: "该控件不能通过语音直接填写。" };
@@ -814,7 +910,19 @@ export async function executeAgentUiActions(
           document.querySelector<HTMLElement>(
             `[data-agent-section="${CSS.escape(sectionKey)}"]`,
           );
+        if (section instanceof HTMLDetailsElement) {
+          section.open = true;
+        } else if (section?.getAttribute("aria-expanded") === "false") {
+          section.click();
+        }
         section?.scrollIntoView({ behavior: "smooth", block: "start" });
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        const firstField =
+          section?.querySelector<HTMLElement>("[data-agent-autofocus='true']") ||
+          section?.querySelector<HTMLElement>(
+            "input:not([type='file']), textarea, select",
+          );
+        if (firstField) flashAndFocus(firstField);
       }
       continue;
     }
@@ -823,7 +931,7 @@ export async function executeAgentUiActions(
       (item) => item.key === action.target_key,
     );
     const element = findControl(control?.id);
-    if (!element) {
+    if (!control || !element) {
       return { ok: false, message: "当前页面没有找到目标字段。" };
     }
     if (action.type === "focus") {
@@ -834,9 +942,25 @@ export async function executeAgentUiActions(
       if (action.value === null || action.value === undefined) {
         return { ok: false, message: "缺少需要填写的内容。" };
       }
+      const previousValue =
+        element instanceof HTMLInputElement &&
+        element.type === "checkbox"
+          ? element.checked
+            ? "true"
+            : "false"
+          : element instanceof HTMLInputElement ||
+              element instanceof HTMLTextAreaElement ||
+              element instanceof HTMLSelectElement
+            ? element.value
+            : "";
       if (!fillControl(element, action.value)) {
         return { ok: false, message: "该字段不能由 Agent 填写。" };
       }
+      recordAgentEdit(
+        control.key,
+        previousValue,
+        action.value,
+      );
       flashAndFocus(element);
       await new Promise((resolve) => window.setTimeout(resolve, 80));
     }
@@ -880,6 +1004,12 @@ const CAPABILITY_PATHS: Record<string, string> = {
   "batch.download_all": "/batch",
   "batch.download_item": "/batch",
   "batch.open_result": "/batch",
+  "library.person.create": "/library",
+  "library.background.extract": "/library",
+  "library.application_project.create": "/library",
+  "library.story.create": "/library",
+  "library.story.reply": "/library",
+  "library.generate_all": "/library",
 };
 
 function capabilityCandidates(name: string): HTMLElement[] {
@@ -926,7 +1056,20 @@ function fillSemanticControl(key: string, value: string): boolean {
   const context = capturePageContext();
   const control = context.controls.find((item) => item.key === key);
   const element = findControl(control?.id);
-  return element ? fillControl(element, value) : false;
+  if (!element) return false;
+  const previousValue =
+    element instanceof HTMLInputElement && element.type === "checkbox"
+      ? element.checked
+        ? "true"
+        : "false"
+      : element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLSelectElement
+        ? element.value
+        : "";
+  const filled = fillControl(element, value);
+  if (filled) recordAgentEdit(key, previousValue, value);
+  return filled;
 }
 
 export async function executeAgentCapability(
@@ -934,6 +1077,9 @@ export async function executeAgentCapability(
   args: Record<string, unknown>,
   navigate: (path: string) => void,
 ): Promise<{ ok: boolean; message: string }> {
+  if (name === "agent.undo_last_edit") {
+    return undoLastAgentEdit();
+  }
   if (name === "app.navigate") {
     const path = String(args.path || "");
     if (!path.startsWith("/")) {
@@ -981,6 +1127,13 @@ export async function executeAgentCapability(
   }
   if (name === "story.answer" && typeof args.answer === "string") {
     fillSemanticControl("story-answer", args.answer);
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+  if (
+    name === "library.story.reply" &&
+    typeof args.answer === "string"
+  ) {
+    fillSemanticControl("workbench-story-reply", args.answer);
     await new Promise((resolve) => window.setTimeout(resolve, 100));
   }
   if (name === "essay.rewrite" && typeof args.instruction === "string") {
@@ -1036,6 +1189,30 @@ export async function restorePendingAgentFocus(): Promise<boolean> {
   }
   sessionStorage.removeItem(PENDING_FOCUS_KEY);
   return false;
+}
+
+export function focusInitialVoiceControl(): string | null {
+  const context = capturePageContext();
+  const editable = context.controls.filter(
+    (control) =>
+      !control.disabled &&
+      control.risk !== "blocked" &&
+      ["text", "textarea", "select", "number"].includes(control.kind),
+  );
+  const current = editable.find(
+    (control) => control.key === context.focused_control_key,
+  );
+  const control =
+    current ||
+    editable.find(
+      (item) => item.required && !item.value.trim(),
+    ) ||
+    editable.find((item) => !item.value.trim());
+  if (!control) return null;
+  const element = findControl(control.id);
+  if (!element) return null;
+  flashAndFocus(element);
+  return control.label;
 }
 
 export function agentHistoryForRequest(

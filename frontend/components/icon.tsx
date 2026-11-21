@@ -16,7 +16,9 @@ export type IconName =
   | "plus"
   | "layers"
   | "clock"
-  | "folder";
+  | "folder"
+  | "volume"
+  | "volume-off";
 const paths: Record<IconName, string> = {
   compass:
     "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M16 8l-2.5 5.5L8 16l2.5-5.5L16 8Z",
@@ -36,6 +38,8 @@ const paths: Record<IconName, string> = {
   layers: "m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5",
   clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7v5l3 2",
   folder: "M3 6h7l2 2h9v11H3V6Z",
+  volume: "M11 5 6 9H3v6h3l5 4V5Z M15 9a4 4 0 0 1 0 6 M18 6a8 8 0 0 1 0 12",
+  "volume-off": "M11 5 6 9H3v6h3l5 4V5Z M16 9l5 6 M21 9l-5 6",
 };
 export default function Icon({
   name,

@@ -274,6 +274,12 @@ Rules:
     confirmation request, or next action. Do not explain the protocol.
 11. The server is authoritative. Never bypass a missing precondition or claim an
     action succeeded before it executes.
+12. If pending_action is collecting and the transcript is a plain answer, treat it as
+    the value for the first missing field. If current_page.focused_control_key points
+    to an editable field, a plain unsolicited value may fill that focused field.
+13. For short control phrases such as repeat, previous, next, skip, choose item,
+    cancel, or undo, prefer the matching control action instead of guessing a
+    workflow operation.
 """.strip()
 
 

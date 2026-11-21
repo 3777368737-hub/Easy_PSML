@@ -662,6 +662,7 @@ class AgentPageContext(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     stage: str = Field(min_length=1, max_length=80)
     summary: str = Field(default="", max_length=1000)
+    focused_control_key: str = Field(default="", max_length=180)
     controls: List[AgentControl] = Field(default_factory=list, max_length=120)
     workflow: List[AgentWorkflowStep] = Field(default_factory=list, max_length=10)
     boundaries: List[Annotated[str, StringConstraints(max_length=500)]] = Field(

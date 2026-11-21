@@ -22,6 +22,22 @@ ALLOWED_PATHS = {
     "/batch",
     "/library",
 }
+SELECT_VALUE_ALIASES = {
+    "target-degree": {
+        "硕士": "Master's",
+        "研究生": "Master's",
+        "博士": "PhD",
+        "phd": "PhD",
+        "证书": "Certificate",
+        "其他": "Other",
+    },
+    "program-essay_type": {
+        "个人陈述": "Personal Statement",
+        "ps": "Personal Statement",
+        "动机信": "Motivation Letter",
+        "ml": "Motivation Letter",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -277,6 +293,48 @@ CAPABILITIES: Dict[str, CapabilitySpec] = {
         "/batch",
         argument_hints='{"item_id": "批次项目 ID"}',
     ),
+    "library.person.create": CapabilitySpec(
+        "library.person.create",
+        "新增人物",
+        "在申请项目页创建新人物。",
+        "/library",
+        requires_confirmation=True,
+    ),
+    "library.background.extract": CapabilitySpec(
+        "library.background.extract",
+        "提取简历背景",
+        "从用户已经选择的简历文件提取背景信息。",
+        "/library",
+        requires_confirmation=True,
+    ),
+    "library.application_project.create": CapabilitySpec(
+        "library.application_project.create",
+        "记录申请项目",
+        "为当前背景记录学校和专业项目。",
+        "/library",
+        requires_confirmation=True,
+    ),
+    "library.story.create": CapabilitySpec(
+        "library.story.create",
+        "开始故事访谈",
+        "为当前申请项目创建并绑定故事访谈。",
+        "/library",
+        requires_confirmation=True,
+    ),
+    "library.story.reply": CapabilitySpec(
+        "library.story.reply",
+        "提交故事回答",
+        "提交申请项目页中的当前故事访谈回答。",
+        "/library",
+        requires_confirmation=True,
+    ),
+    "library.generate_all": CapabilitySpec(
+        "library.generate_all",
+        "生成全部文书",
+        "为当前装配画布内的全部文书分支提交生成任务。",
+        "/library",
+        requires_confirmation=True,
+    ),
     "agent.cancel_pending": CapabilitySpec(
         "agent.cancel_pending",
         "取消待执行操作",
@@ -289,6 +347,12 @@ CAPABILITIES: Dict[str, CapabilitySpec] = {
         "在用户明确确认后提交当前待执行操作。",
         "*",
         argument_hints='{"action_id": "待执行操作 ID"}',
+    ),
+    "agent.undo_last_edit": CapabilitySpec(
+        "agent.undo_last_edit",
+        "撤销上次填写",
+        "撤销最近一次由语音 Agent 写入的页面字段。",
+        "*",
     ),
 }
 
@@ -419,17 +483,53 @@ def infer_capability(
     text = re.sub(r"\s+", "", transcript.casefold())
     if not text:
         return None
-    if any(word in text for word in ("取消操作", "取消刚才", "算了", "不要执行")):
+    if any(
+        word in text
+        for word in (
+            "取消操作",
+            "取消刚才",
+            "算了",
+            "不要执行",
+            "不用了",
+            "不执行",
+            "停止",
+        )
+    ):
         return AgentCapabilityCall(name="agent.cancel_pending", arguments={})
-    if text in {"确认", "确认执行", "确定", "开始吧", "执行吧"}:
+    if text in {
+        "确认",
+        "确认执行",
+        "确定",
+        "确定执行",
+        "执行",
+        "开始吧",
+        "执行吧",
+        "可以",
+        "可以执行",
+        "好的",
+        "好",
+        "没问题",
+        "是的",
+        "对",
+    }:
         return AgentCapabilityCall(name="agent.confirm_pending", arguments={})
+    if text in {"撤销", "撤销刚才", "撤回刚才", "改回上一项", "恢复刚才"}:
+        return AgentCapabilityCall(name="agent.undo_last_edit", arguments={})
     route_aliases = {
-        "/profile": ("背景", "个人信息", "申请画像"),
+        "/profile": ("背景资料", "背景信息", "个人信息", "申请画像"),
         "/program": ("项目分析", "目标项目"),
-        "/story": ("故事挖掘", "访谈"),
-        "/result": ("文书工作台", "结果页", "生成结果"),
+        "/story": ("故事访谈", "故事挖掘", "访谈"),
+        "/result": ("文书编辑", "文书工作台", "结果页", "生成结果"),
         "/batch": ("批量生成", "批量任务"),
-        "/library": ("装配工作台", "实例库", "人物库", "背景库", "故事库"),
+        "/library": (
+            "申请项目",
+            "项目总览",
+            "装配工作台",
+            "实例库",
+            "人物库",
+            "背景库",
+            "故事库",
+        ),
     }
     if any(word in text for word in ("打开", "进入", "跳到", "前往", "去")):
         for path, aliases in route_aliases.items():
@@ -443,6 +543,8 @@ def infer_capability(
         if "批量" in text:
             return AgentCapabilityCall(name="profile.continue_batch", arguments={})
         if "解析" in text and any(word in text for word in ("简历", "文件")):
+            return AgentCapabilityCall(name="profile.parse_resume", arguments={})
+        if "上传" in text and "简历" in text:
             return AgentCapabilityCall(name="profile.parse_resume", arguments={})
         if any(word in text for word in ("保存草稿", "存草稿")):
             return AgentCapabilityCall(name="profile.save_draft", arguments={})
@@ -484,6 +586,41 @@ def infer_capability(
             return AgentCapabilityCall(name="batch.add_direction", arguments={})
         if "删除" in text and "方向" in text:
             return AgentCapabilityCall(name="batch.remove_direction", arguments={})
+    if context.path == "/library":
+        if "新增" in text and "人物" in text:
+            return AgentCapabilityCall(name="library.person.create", arguments={})
+        if any(word in text for word in ("提取背景", "解析简历", "提取简历")):
+            return AgentCapabilityCall(
+                name="library.background.extract",
+                arguments={},
+            )
+        if (
+            any(word in text for word in ("记录项目", "添加项目", "创建项目"))
+            and "故事" not in text
+        ):
+            return AgentCapabilityCall(
+                name="library.application_project.create",
+                arguments={},
+            )
+        if "故事" in text and any(
+            word in text for word in ("开始", "创建", "挖掘", "新增")
+        ):
+            return AgentCapabilityCall(
+                name="library.story.create",
+                arguments={},
+            )
+        if "故事" in text and any(
+            word in text for word in ("回答", "提交", "发送")
+        ):
+            return AgentCapabilityCall(
+                name="library.story.reply",
+                arguments={},
+            )
+        if "生成全部" in text or ("生成" in text and "全部文书" in text):
+            return AgentCapabilityCall(
+                name="library.generate_all",
+                arguments={},
+            )
     return None
 
 
@@ -527,8 +664,16 @@ def validate_ui_actions(
 def _normalize_fill_value(control: Any, value: str) -> Optional[str]:
     cleaned = value.strip()
     if control.kind == "select":
+        compact = re.sub(r"\s+", "", cleaned.casefold())
+        alias = SELECT_VALUE_ALIASES.get(control.key, {}).get(compact)
+        if alias is not None:
+            return alias
         for option in control.options:
-            if cleaned == option.value or cleaned.casefold() == option.label.casefold():
+            if cleaned == option.value:
+                return option.value
+            label = re.sub(r"\s+", "", option.label.casefold())
+            option_value = re.sub(r"\s+", "", option.value.casefold())
+            if compact in {label, option_value}:
                 return option.value
         return None
     if control.kind == "checkbox":
@@ -563,6 +708,20 @@ def _missing(
     target_key: Optional[str] = None,
 ) -> AgentMissingField:
     return AgentMissingField(key=key, label=label, target_key=target_key)
+
+
+def _control_value(
+    context: AgentPageContext,
+    *,
+    key: str = "",
+    label: str = "",
+) -> str:
+    for control in context.controls:
+        if key and control.key == key:
+            return str(control.value).strip()
+        if label and label in control.label:
+            return str(control.value).strip()
+    return ""
 
 
 def _profile_form(context: AgentPageContext) -> Dict[str, Any]:
@@ -760,6 +919,19 @@ def validate_capability(
         ]
         if not matching_controls:
             return [_missing("operation", "当前页面中可用的操作按钮")]
+        field_validated_actions = {
+            "profile.parse_resume",
+            "library.person.create",
+            "library.background.extract",
+            "library.application_project.create",
+            "library.story.create",
+            "library.story.reply",
+        }
+        if (
+            call.name not in field_validated_actions
+            and not any(not control.disabled for control in matching_controls)
+        ):
+            return [_missing("operation", "当前页面中可用的操作按钮")]
 
     db = store or get_store()
     args = call.arguments
@@ -907,6 +1079,45 @@ def validate_capability(
                 return [_missing("index", "有效的方向序号")]
             if len(directions) <= 1:
                 return [_missing("directions", "至少保留一个申请方向")]
+        return []
+    if call.name.startswith("library."):
+        if call.name == "library.person.create":
+            if not _control_value(context, label="新人物姓名"):
+                return [_missing("display_name", "新人物姓名")]
+            return []
+        if call.name == "library.background.extract":
+            missing = []
+            if not _control_value(context, key="workbench-person"):
+                missing.append(_missing("person_id", "已选择的人物"))
+            if not _control_value(context, key="workbench-resume-name"):
+                missing.append(_missing("resume_name", "简历名称"))
+            if not bool(context.page_data.get("resume_selected")):
+                missing.append(_missing("resume", "已选择的简历文件"))
+            return missing
+        if call.name == "library.application_project.create":
+            missing = []
+            if not _control_value(context, key="workbench-background"):
+                missing.append(_missing("background_id", "人物背景"))
+            if not _control_value(context, key="workbench-school"):
+                missing.append(_missing("school_name", "学校名称"))
+            if not _control_value(context, key="workbench-program"):
+                missing.append(_missing("program_name", "专业或项目名称"))
+            return missing
+        if call.name == "library.story.create":
+            missing = []
+            if not _control_value(context, key="workbench-story-project"):
+                missing.append(_missing("application_project_id", "申请项目"))
+            if not _control_value(context, key="workbench-story-title"):
+                missing.append(_missing("title", "故事名称"))
+            return missing
+        if call.name == "library.story.reply":
+            answer = str(
+                call.arguments.get("answer")
+                or context.page_data.get("library_story_reply")
+                or ""
+            ).strip()
+            if not answer:
+                return [_missing("answer", "本轮故事回答")]
         return []
     return []
 

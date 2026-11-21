@@ -270,6 +270,11 @@ export class RealtimeVoiceSession {
     await this.cleanupCapture();
   }
 
+  setInputActive(active: boolean): void {
+    if (!this.ready || this.intentionalStop) return;
+    this.capture?.setActive(active);
+  }
+
   private connect(delayMs: number): void {
     if (!this.active || this.intentionalStop) return;
     this.clearReconnectTimer();

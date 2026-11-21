@@ -15,7 +15,7 @@ const registrySource = await readFile(
   "utf8",
 );
 const registered = new Set(
-  [...registrySource.matchAll(/"((?:profile|program|story|essay|project|result|history|batch|app|agent)\.[a-z_.]+)": CapabilitySpec/g)].map(
+  [...registrySource.matchAll(/"((?:profile|program|story|essay|project|result|history|batch|library|app|agent)\.[a-z_.]+)": CapabilitySpec/g)].map(
     (match) => match[1],
   ),
 );

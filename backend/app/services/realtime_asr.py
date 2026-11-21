@@ -309,6 +309,7 @@ async def run_realtime_asr_session(
                 browser_task.cancel()
                 await asyncio.gather(browser_task, return_exceptions=True)
             else:
+                await asyncio.gather(browser_task, return_exceptions=True)
                 try:
                     await asyncio.wait_for(
                         upstream_task,

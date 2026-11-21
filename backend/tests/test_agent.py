@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.errors import UpstreamServiceError
 from app.main import app
 from app.schemas import (
     AgentCapabilityCall,
@@ -122,6 +123,15 @@ class FakeStreamingQwenClient(FakeQwenClient):
                 ),
             )
         )
+
+
+class FailingQwenClient(FakeQwenClient):
+    async def chat_json(self, messages, response_model, *, max_tokens=1800):
+        raise UpstreamServiceError("not configured")
+
+    async def stream_chat_json(self, messages, response_model, *, max_tokens=900):
+        raise UpstreamServiceError("not configured")
+        yield
 
 
 class ScriptedStreamingQwenClient(QwenClient):
@@ -247,6 +257,102 @@ class AgentTests(unittest.TestCase):
         }
         return context
 
+    def empty_program_context(self, profile_id: str) -> dict:
+        context = copy.deepcopy(CONTEXT)
+        context["ids"]["profile_id"] = profile_id
+        context["focused_control_key"] = "program-school_name"
+        context["controls"] = [
+            {
+                "id": "agent-0",
+                "key": "program-school_name",
+                "kind": "text",
+                "label": "学校名称",
+                "scope": "目标项目",
+                "value": "",
+                "required": True,
+                "risk": "safe",
+                "options": [],
+            },
+            {
+                "id": "agent-1",
+                "key": "program-program_name",
+                "kind": "text",
+                "label": "项目名称",
+                "scope": "目标项目",
+                "value": "",
+                "required": True,
+                "risk": "safe",
+                "options": [],
+            },
+            {
+                "id": "agent-2",
+                "key": "program-essay_type",
+                "kind": "select",
+                "label": "文书类型",
+                "scope": "目标项目",
+                "value": "Personal Statement",
+                "required": True,
+                "risk": "safe",
+                "options": [
+                    {
+                        "value": "Personal Statement",
+                        "label": "Personal Statement",
+                    },
+                    {
+                        "value": "Motivation Letter",
+                        "label": "Motivation Letter",
+                    },
+                ],
+            },
+            {
+                "id": "agent-3",
+                "key": "program-word_limit",
+                "kind": "number",
+                "label": "字数上限",
+                "scope": "目标项目",
+                "value": "800",
+                "required": True,
+                "risk": "safe",
+                "min_value": 100,
+                "max_value": 5000,
+                "options": [],
+            },
+            {
+                "id": "agent-4",
+                "key": "program-prompt_text",
+                "kind": "textarea",
+                "label": "文书题目 / 具体要求",
+                "scope": "目标项目",
+                "value": "",
+                "required": True,
+                "risk": "safe",
+                "options": [],
+            },
+            {
+                "id": "agent-5",
+                "key": "program-submit",
+                "kind": "button",
+                "label": "开始项目分析",
+                "scope": "目标项目",
+                "value": "",
+                "required": False,
+                "risk": "confirm",
+                "capability": "program.analyze",
+                "options": [],
+            },
+        ]
+        context["page_data"] = {
+            "program_form": {
+                "school_name": "",
+                "program_name": "",
+                "essay_type": "Personal Statement",
+                "word_limit": "800",
+                "prompt_text": "",
+                "program_details": "",
+            }
+        }
+        return context
+
     def test_text_agent_filters_ui_targets_and_blocks_incomplete_capability(self) -> None:
         response = self.client.post(
             "/api/agent/text",
@@ -304,6 +410,10 @@ class AgentTests(unittest.TestCase):
         self.assertIn("essay.draft", names)
         self.assertIn("batch.create", names)
         self.assertIn("history.clear", names)
+        self.assertIn("library.person.create", names)
+        self.assertIn("library.application_project.create", names)
+        self.assertIn("library.story.create", names)
+        self.assertIn("agent.undo_last_edit", names)
 
     def test_clear_action_request_falls_back_to_workflow_capability(self) -> None:
         context = agent.AgentPageContext.model_validate(CONTEXT)
@@ -412,6 +522,358 @@ class AgentTests(unittest.TestCase):
             body["capability"]["arguments"]["action_id"],
             action_id,
         )
+
+    def test_offline_slot_answer_continues_without_repeating_full_command(self) -> None:
+        profile = agent.get_store().save_profile(OWNER_A, ProfileData())
+        context = self.empty_program_context(profile.id)
+        agent.qwen_client = FailingQwenClient()
+
+        started = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "开始分析项目",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        started_body = started.json()
+        self.assertEqual(started_body["status"], "needs_input")
+        self.assertEqual(
+            started_body["pending_action"]["status"],
+            "collecting",
+        )
+
+        answered = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "香港科技大学",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(answered.status_code, 200, answered.text)
+        body = answered.json()
+        fill = next(
+            action
+            for action in body["ui_actions"]
+            if action["type"] == "fill"
+        )
+        self.assertEqual(fill["target_key"], "program-school_name")
+        self.assertEqual(fill["value"], "香港科技大学")
+        self.assertEqual(body["status"], "needs_input")
+        self.assertEqual(body["next_field"], "program-program_name")
+        self.assertEqual(
+            body["pending_action"]["capability"],
+            "program.analyze",
+        )
+
+    def test_offline_confirmation_and_repeat_controls_are_deterministic(self) -> None:
+        profile = agent.get_store().save_profile(OWNER_A, ProfileData())
+        context = self.complete_program_context(profile.id)
+        agent.qwen_client = FailingQwenClient()
+        prepared = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "开始分析项目",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.text)
+        self.assertEqual(
+            prepared.json()["status"],
+            "confirmation_required",
+        )
+
+        repeated = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "再说一遍",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertIn("请确认", repeated.json()["message"])
+
+        confirmed = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "好的",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(confirmed.json()["status"], "ready")
+        self.assertEqual(
+            confirmed.json()["capability"]["name"],
+            "agent.confirm_pending",
+        )
+
+    def test_offline_ordinal_choice_and_undo_controls_work(self) -> None:
+        context = self.empty_program_context("profile-test")
+        context["focused_control_key"] = "program-essay_type"
+        agent.qwen_client = FailingQwenClient()
+
+        selected = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "第二个",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(selected.status_code, 200, selected.text)
+        fill = next(
+            action
+            for action in selected.json()["ui_actions"]
+            if action["type"] == "fill"
+        )
+        self.assertEqual(fill["target_key"], "program-essay_type")
+        self.assertEqual(fill["value"], "Motivation Letter")
+
+        undo = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "撤销",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(undo.status_code, 200, undo.text)
+        self.assertEqual(undo.json()["status"], "ready")
+        self.assertEqual(
+            undo.json()["capability"]["name"],
+            "agent.undo_last_edit",
+        )
+
+    def test_offline_unknown_input_returns_safe_clarification(self) -> None:
+        agent.qwen_client = FailingQwenClient()
+        response = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "帮我看看这个",
+                "context": CONTEXT,
+                "history": [],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "answered")
+        self.assertEqual(body["intent"], "clarify")
+        self.assertIn("没有理解", body["message"])
+
+    def test_offline_library_form_open_uses_semantic_section(self) -> None:
+        context = copy.deepcopy(CONTEXT)
+        context.update(
+            {
+                "path": "/library",
+                "title": "申请项目",
+                "stage": "library",
+                "summary": "管理申请项目。",
+                "controls": [
+                    {
+                        "id": "agent-0",
+                        "key": "background-source-form",
+                        "kind": "button",
+                        "label": "新建人物与简历背景",
+                        "scope": "人物背景信息",
+                        "value": "",
+                        "required": False,
+                        "risk": "safe",
+                        "options": [],
+                    }
+                ],
+                "page_data": {},
+            }
+        )
+        agent.qwen_client = FailingQwenClient()
+        response = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "新建人物背景",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        action = body["ui_actions"][0]
+        self.assertEqual(action["type"], "open_section")
+        self.assertEqual(action["section"], "background-source-form")
+
+    def test_slot_guidance_does_not_jump_between_library_cards(self) -> None:
+        context = {
+            "path": "/library",
+            "title": "申请项目",
+            "stage": "library",
+            "summary": "管理申请项目。",
+            "focused_control_key": "new-person-name",
+            "controls": [
+                {
+                    "id": "agent-0",
+                    "key": "new-person-name",
+                    "kind": "text",
+                    "label": "新人物姓名",
+                    "scope": "人物背景信息",
+                    "value": "",
+                    "required": True,
+                    "risk": "safe",
+                    "options": [],
+                },
+                {
+                    "id": "agent-1",
+                    "key": "library-person-create",
+                    "kind": "button",
+                    "label": "新增人物",
+                    "scope": "人物背景信息",
+                    "value": "",
+                    "required": False,
+                    "risk": "confirm",
+                    "capability": "library.person.create",
+                    "options": [],
+                },
+                {
+                    "id": "agent-2",
+                    "key": "workbench-school",
+                    "kind": "text",
+                    "label": "学校",
+                    "scope": "已记录项目",
+                    "value": "",
+                    "required": True,
+                    "risk": "safe",
+                    "options": [],
+                },
+            ],
+            "workflow": [],
+            "boundaries": [],
+            "state": {},
+            "ids": {},
+            "page_data": {},
+        }
+        agent.qwen_client = FailingQwenClient()
+        prepared = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "提交新增人物",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.text)
+        self.assertEqual(prepared.json()["status"], "needs_input")
+
+        filled = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "张三",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(filled.status_code, 200, filled.text)
+        body = filled.json()
+        self.assertEqual(body["status"], "confirmation_required")
+        self.assertFalse(
+            any(
+                action.get("target_key") == "workbench-school"
+                for action in body["ui_actions"]
+                if action["type"] == "focus"
+            )
+        )
+
+    def test_file_input_falls_back_to_explicit_manual_prompt(self) -> None:
+        context = copy.deepcopy(CONTEXT)
+        context.update(
+            {
+                "path": "/profile",
+                "title": "背景资料",
+                "stage": "profile",
+                "summary": "填写背景资料。",
+                "controls": [
+                    {
+                        "id": "agent-0",
+                        "key": "resume-file",
+                        "kind": "file",
+                        "label": "选择简历",
+                        "scope": "从一份简历开始",
+                        "value": "",
+                        "required": False,
+                        "risk": "safe",
+                        "options": [],
+                    },
+                    {
+                        "id": "agent-1",
+                        "key": "profile-parse-resume",
+                        "kind": "button",
+                        "label": "一键解析简历并回填",
+                        "scope": "从一份简历开始",
+                        "value": "",
+                        "required": False,
+                        "disabled": True,
+                        "risk": "confirm",
+                        "capability": "profile.parse_resume",
+                        "options": [],
+                    },
+                ],
+                "page_data": {
+                    "resume_selected": False,
+                    "resume_name": "",
+                },
+            }
+        )
+        agent.qwen_client = FailingQwenClient()
+        first = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "解析简历",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.json()["status"], "needs_input")
+
+        second = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "这是我的简历",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertIn("不能通过语音选择本地文件", second.json()["message"])
+
+    def test_streaming_agent_falls_back_when_intent_model_fails(self) -> None:
+        agent.qwen_client = FailingQwenClient()
+        response = self.client.post(
+            "/api/agent/text/stream",
+            headers=self.headers,
+            json={
+                "transcript": "帮我看看这个",
+                "context": CONTEXT,
+                "history": [],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("event: final", response.text)
+        self.assertIn("没有理解", response.text)
 
     def test_commit_revalidates_changed_page_state(self) -> None:
         profile = agent.get_store().save_profile(OWNER_A, ProfileData())

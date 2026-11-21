@@ -99,8 +99,46 @@ export function shouldUseDomainAgent(
   transcript: string,
   pathname: string,
 ): boolean {
-  if (pathname === "/library") return true;
   const text = transcript.replace(/\s+/g, "");
+  if (
+    /^(?:打开|进入|跳到|前往|去|确认|确定|取消|不要|不用|停止|重复|再说|没听清|没听懂|帮我|怎么办|下一项|上一项|跳过|撤销)/.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /(?:新建|添加|上传|记录|挖掘|开始)(?:人物|背景|简历|项目|学校|故事)/.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /^(?:提交|保存|执行)(?:新增|添加|新建|记录|开始)?(?:人物|背景|简历|项目|学校|故事)/.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (pathname === "/library") {
+    if (
+      /(?:分析|大纲|草稿|审核|重写|生成)/.test(text) &&
+      /(?:文书|PS|ML|项目|当前)/i.test(text) &&
+      !/生成全部/.test(text)
+    ) {
+      return true;
+    }
+    return (
+      /(?:新建|创建|记录|绑定|挖掘|选择|切换|修改|删除|开始|继续|暂停|恢复).*(?:人物|背景|申请项目|学校项目|故事|文书项目|批量任务)/.test(
+        text,
+      ) ||
+      /(?:人物|背景|简历|申请项目|学校项目|故事|文书项目|批量任务).*(?:新建|创建|记录|绑定|选择|切换|修改|删除|开始|继续|暂停|恢复)/.test(
+        text,
+      ) ||
+      /(?:的|这份|那份).{0,12}(?:简历|背景)/.test(text)
+    );
+  }
   if (
     [
       "人物",
