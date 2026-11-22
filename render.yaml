@@ -29,6 +29,16 @@ services:
         value: "1200"
       - key: QWEN_INTENT_MODEL
         value: qwen-plus-latest
+      - key: DOCUMENT_EXPORT_MODEL
+        value: ZHIPU/GLM-5.3-Flash
+      - key: DOCUMENT_EXPORT_BASE_URL
+        value: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - key: DOCUMENT_EXPORT_TIMEOUT_SECONDS
+        value: "120"
+      - key: DOCUMENT_EXPORT_MAX_RETRIES
+        value: "1"
+      - key: DOCUMENT_EXPORT_MAX_TOKENS
+        value: "7000"
       - key: APP_CORS_ORIGINS
         sync: false
       - key: DATABASE_PATH

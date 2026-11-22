@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import re
@@ -47,6 +48,7 @@ from app.schemas import (
     BatchCreateRequest,
     BatchResponse,
     DeleteHistoryResponse,
+    DocumentExportRequest,
     DomainAgentRequest,
     DomainCommandResponse,
     DraftRequest,
@@ -91,6 +93,7 @@ from app.services.batch import create_batch, retry_batch, start_worker, stop_wor
 from app.services.domain_store import get_domain_store
 from app.services import domain_agent
 from app.services import domain_workflow
+from app.services import document_export
 from app.services.store import get_store
 from app.services.workflow import (
     analyze_program,
@@ -155,6 +158,11 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Client-Id", "X-Request-Id"],
+    expose_headers=[
+        "Content-Disposition",
+        "X-Document-Formatting",
+        "X-Request-Id",
+    ],
     allow_private_network=True,
 )
 
@@ -279,6 +287,23 @@ def agent_stream_response(events: AsyncIterator[str]) -> StreamingResponse:
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def exported_document_response(
+    exported: document_export.ExportedDocument,
+) -> StreamingResponse:
+    return StreamingResponse(
+        io.BytesIO(exported.content),
+        media_type=exported.media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{exported.filename}"'
+            ),
+            "Content-Length": str(len(exported.content)),
+            "Cache-Control": "no-store",
+            "X-Document-Formatting": exported.formatting_source,
         },
     )
 
@@ -612,6 +637,34 @@ async def draft_essay_project(
     owner_id: str = Depends(enforce_model_rate_limit),
 ) -> EssayProjectResponse:
     return await domain_workflow.generate_draft(owner_id, project_id, request)
+
+
+@app.post("/api/essay-projects/{project_id}/export")
+async def export_essay_project(
+    project_id: str,
+    request: DocumentExportRequest,
+    owner_id: str = Depends(enforce_model_rate_limit),
+) -> StreamingResponse:
+    store = get_domain_store()
+    project = store.get_project(owner_id, project_id)
+    draft = document_export.resolve_draft_version(
+        project.draft,
+        project.versions,
+        request.artifact_version_id,
+    )
+    background = store.get_background(owner_id, project.background_instance_id)
+    exported = await document_export.export_document(
+        document_export.DocumentExportContext(
+            record_id=project.id,
+            applicant_name=background.profile.basic_profile.full_name,
+            school_name=project.program.school_name,
+            program_name=project.program.program_name,
+            essay_type=project.program.essay_type,
+            draft=draft,
+        ),
+        request.format,
+    )
+    return exported_document_response(exported)
 
 
 @app.post(
@@ -1099,6 +1152,32 @@ async def session_snapshot(
     owner_id: str = Depends(get_owner_id),
 ) -> SessionSnapshotResponse:
     return get_store().session_snapshot(session_id, owner_id)
+
+
+@app.post("/api/session/{session_id}/export")
+async def export_session_draft(
+    session_id: str,
+    request: DocumentExportRequest,
+    owner_id: str = Depends(enforce_model_rate_limit),
+) -> StreamingResponse:
+    snapshot = get_store().session_snapshot(session_id, owner_id)
+    draft = document_export.resolve_draft_version(
+        snapshot.draft,
+        snapshot.versions,
+        request.artifact_version_id,
+    )
+    exported = await document_export.export_document(
+        document_export.DocumentExportContext(
+            record_id=snapshot.session_id,
+            applicant_name=snapshot.profile.basic_profile.full_name,
+            school_name=snapshot.program.school_name,
+            program_name=snapshot.program.program_name,
+            essay_type=snapshot.program.essay_type,
+            draft=draft,
+        ),
+        request.format,
+    )
+    return exported_document_response(exported)
 
 
 @app.get("/api/history", response_model=List[HistoryItem])

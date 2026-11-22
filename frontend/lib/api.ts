@@ -165,6 +165,76 @@ export async function apiStreamFetch(
   );
 }
 
+export type ApiDownloadResult = {
+  blob: Blob;
+  filename: string;
+  formatting: string;
+};
+
+function filenameFromDisposition(value: string | null): string {
+  if (!value) return '';
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim());
+    } catch {
+      return encoded.trim();
+    }
+  }
+  const plain = value.match(/filename="?([^";]+)"?/i)?.[1];
+  return plain?.trim() || '';
+}
+
+export async function apiDownloadFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<ApiDownloadResult> {
+  const headers = new Headers(init?.headers);
+  headers.set('X-Client-Id', getClientId());
+  headers.set('X-Request-Id', randomId());
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  } catch {
+    throw new ApiError(
+      `无法连接后端服务（${API_BASE}），请确认服务正在运行。`,
+      0,
+      'network_error',
+    );
+  }
+
+  if (!response.ok) {
+    const raw = await response.text();
+    let parsed: ApiErrorPayload = {};
+    if (raw) {
+      try {
+        parsed = JSON.parse(raw) as ApiErrorPayload;
+      } catch {
+        parsed = { detail: raw };
+      }
+    }
+    throw new ApiError(
+      extractErrorMessage(parsed, `下载失败（${response.status}）`),
+      response.status,
+      typeof parsed.code === 'string' ? parsed.code : 'download_failed',
+      typeof parsed.request_id === 'string' ? parsed.request_id : '',
+    );
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(
+      response.headers.get('Content-Disposition'),
+    ),
+    formatting: response.headers.get('X-Document-Formatting') || '',
+  };
+}
+
 export async function apiBlobFetch(path: string): Promise<Blob> {
   const headers = new Headers();
   headers.set('X-Client-Id', getClientId());
@@ -198,6 +268,9 @@ export function readableError(error: unknown, fallback = '操作失败'): string
   if (!(error instanceof ApiError)) return error.message || fallback;
 
   const messages: Record<string, string> = {
+    draft_required: '请先生成文书草稿，再选择 DOCX 或 PDF 导出。',
+    draft_version_invalid: '所选的草稿版本不可导出，请返回当前版本后重试。',
+    download_failed: error.message,
     network_error: error.message,
     model_not_configured: '后端尚未配置 DEEPSEEK_API_KEY，请检查 backend/.env。',
     model_auth_failed: '模型服务鉴权失败，请检查 API Key 是否正确或是否过期。',

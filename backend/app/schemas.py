@@ -346,6 +346,11 @@ class EssayProjectDraftRequest(BaseModel):
         return value.strip()
 
 
+class DocumentExportRequest(BaseModel):
+    format: Literal["doc", "docx", "pdf"]
+    artifact_version_id: Optional[Identifier] = None
+
+
 class EssayProjectPatchRequest(BaseModel):
     school_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     program_name: Optional[str] = Field(default=None, min_length=1, max_length=200)

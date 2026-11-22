@@ -86,6 +86,36 @@ class Settings(BaseModel):
         ge=0,
         le=4,
     )
+    document_export_model: str = Field(
+        default=os.getenv(
+            "DOCUMENT_EXPORT_MODEL",
+            "ZHIPU/GLM-5.3-Flash",
+        )
+    )
+    document_export_base_url: str = Field(
+        default=os.getenv(
+            "DOCUMENT_EXPORT_BASE_URL",
+            os.getenv(
+                "QWEN_BASE_URL",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
+        )
+    )
+    document_export_timeout_seconds: float = Field(
+        default=float(os.getenv("DOCUMENT_EXPORT_TIMEOUT_SECONDS", "120")),
+        ge=10,
+        le=300,
+    )
+    document_export_max_retries: int = Field(
+        default=int(os.getenv("DOCUMENT_EXPORT_MAX_RETRIES", "1")),
+        ge=0,
+        le=3,
+    )
+    document_export_max_tokens: int = Field(
+        default=int(os.getenv("DOCUMENT_EXPORT_MAX_TOKENS", "7000")),
+        ge=512,
+        le=12000,
+    )
     qwen_asr_language: str = Field(
         default=os.getenv("QWEN_ASR_LANGUAGE", "zh"),
         max_length=16,

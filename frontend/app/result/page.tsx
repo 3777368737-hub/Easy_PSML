@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Icon from "@/components/icon";
+import DocumentExportControls from "@/components/document-export-controls";
 import { useRouter } from "next/navigation";
 import { apiFetch, readableError } from "@/lib/api";
 import { loadState, removeState, saveState, STORAGE_KEYS } from "@/lib/storage";
@@ -309,18 +310,6 @@ export default function ResultPage() {
     }
   }
 
-  function downloadDraft() {
-    const draft = selectedArtifact ? selectedArtifact.draft : snapshot?.draft;
-    if (!draft) return;
-    const blob = new Blob([draft], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `gradpilot-draft-${selectedArtifact?.version_no || "latest"}.txt`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
   const visibleOutline = selectedArtifact
     ? selectedArtifact.outline
     : snapshot?.outline;
@@ -352,19 +341,6 @@ export default function ResultPage() {
     visibleDraft?.trim().split(/\s+/).filter(Boolean).length || 0;
   const hasHistory = useMemo(() => history.length > 0, [history]);
   const canGenerate = snapshot?.status === "ready";
-
-  function downloadProjectDraft() {
-    if (!activeProject?.draft) return;
-    const blob = new Blob([activeProject.draft], {
-      type: "text/plain;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `gradpilot-${activeProject.id.slice(0, 8)}-draft.txt`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
 
   async function copyProjectDraft() {
     if (!activeProject?.draft) return;
@@ -514,14 +490,11 @@ export default function ResultPage() {
                 </div>
                 <pre className="code-block">{activeProject.draft}</pre>
                 <div className="actions">
-                  <button
-                    className="btn-secondary"
-                    type="button"
-                    data-agent-capability="essay.download"
-                    onClick={downloadProjectDraft}
-                  >
-                    下载草稿
-                  </button>
+                  <DocumentExportControls
+                    key={`project-export-${activeProject.id}`}
+                    endpoint={`/api/essay-projects/${activeProject.id}/export`}
+                    disabled={loading}
+                  />
                   <button
                     className="btn-secondary"
                     type="button"
@@ -756,21 +729,22 @@ export default function ResultPage() {
                     </span>
                   </div>
                   <pre className="code-block">{visibleDraft}</pre>
+                  <DocumentExportControls
+                    key={`session-export-${snapshot?.session_id || "current"}-${
+                      selectedArtifact?.id || "current"
+                    }`}
+                    endpoint={`/api/session/${snapshot?.session_id}/export`}
+                    artifactVersionId={
+                      selectedArtifact?.draft ? selectedArtifact.id : undefined
+                    }
+                    disabled={loading}
+                  />
                 </>
               ) : (
                 <p className="muted">尚未生成草稿。</p>
               )}
               {visibleDraft ? (
                 <div className="actions">
-                  <button
-                    className="btn-secondary"
-                    type="button"
-                    data-agent-capability="essay.download"
-                    onClick={downloadDraft}
-                  >
-                    <Icon name="file" size={16} />
-                    下载草稿
-                  </button>
                   <button
                     className="btn-secondary"
                     type="button"
