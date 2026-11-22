@@ -302,6 +302,7 @@ const PAGE_META: Record<
 };
 
 const PENDING_FOCUS_KEY = "gradpilot_agent_pending_focus";
+const PENDING_SECTION_KEY = "gradpilot_agent_pending_section";
 const AGENT_UNDO_KEY = "gradpilot_agent_undo_stack";
 const SAFE_BUTTON_PATTERN =
   /返回|上一页|下一步|进入|前往|去生成结果|查看|切换|加载|保存草稿|添加|移除|刷新|重新连接|打开|关闭|展开|收起/;
@@ -373,6 +374,7 @@ function controlKey(element: HTMLElement, kind: AgentControlKind, index: number)
 
 function controlKind(element: HTMLElement): AgentControlKind | null {
   if (element.tagName === "SUMMARY") return "button";
+  if (element.dataset.agentFocusable === "true") return "button";
   if (element instanceof HTMLTextAreaElement) return "textarea";
   if (element instanceof HTMLSelectElement) return "select";
   if (element instanceof HTMLButtonElement) return "button";
@@ -559,7 +561,7 @@ export function capturePageContext(): AgentPageContext {
   const elements = root
     ? Array.from(
         root.querySelectorAll<HTMLElement>(
-          "input, textarea, select, button, summary, a[href]",
+          "input, textarea, select, button, summary, a[href], [data-agent-focusable='true']",
         ),
       )
     : [];
@@ -1188,6 +1190,51 @@ export async function restorePendingAgentFocus(): Promise<boolean> {
     await new Promise((resolve) => window.setTimeout(resolve, 150));
   }
   sessionStorage.removeItem(PENDING_FOCUS_KEY);
+  return false;
+}
+
+export function setPendingAgentFocus(targetKey: string): void {
+  if (!targetKey) return;
+  sessionStorage.setItem(PENDING_FOCUS_KEY, targetKey);
+}
+
+export function setPendingAgentSection(sectionKey: string): void {
+  if (!sectionKey) return;
+  sessionStorage.setItem(PENDING_SECTION_KEY, sectionKey);
+}
+
+export function clearPendingAgentTargets(): void {
+  sessionStorage.removeItem(PENDING_FOCUS_KEY);
+  sessionStorage.removeItem(PENDING_SECTION_KEY);
+}
+
+export function restorePendingAgentSection(): boolean {
+  const sectionKey = sessionStorage.getItem(PENDING_SECTION_KEY);
+  if (!sectionKey) return false;
+  const opened = openAgentSection(sectionKey);
+  if (opened) sessionStorage.removeItem(PENDING_SECTION_KEY);
+  return opened;
+}
+
+export function openAgentSection(sectionKey: string): boolean {
+  if (!sectionKey) return false;
+  const section =
+    document.getElementById(sectionKey) ||
+    document.querySelector<HTMLElement>(
+      `[data-agent-section="${CSS.escape(sectionKey)}"]`,
+    );
+  if (section instanceof HTMLDetailsElement) {
+    section.open = true;
+    return true;
+  }
+  if (section?.getAttribute("aria-expanded") === "false") {
+    section.click();
+    return true;
+  }
+  if (section) {
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+    return true;
+  }
   return false;
 }
 

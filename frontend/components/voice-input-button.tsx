@@ -9,11 +9,15 @@ import {
 import {
   agentHistoryForRequest,
   capturePageContext,
+  clearPendingAgentTargets,
   consumeAgentStream,
   executeAgentCapability,
   executeAgentUiActions,
   focusInitialVoiceControl,
   restorePendingAgentFocus,
+  restorePendingAgentSection,
+  setPendingAgentFocus,
+  setPendingAgentSection,
   type AgentStreamEvent,
   type AgentActionCommitResponse,
   type AgentCommandResponse,
@@ -21,11 +25,17 @@ import {
 } from "@/lib/voice-agent";
 import {
   applyDomainResolved,
+  domainNavigationTarget,
   sendDomainCommand,
   shouldUseDomainAgent,
   type DomainAgentResponse,
 } from "@/lib/domain-agent";
-import { loadState, saveState, STORAGE_KEYS } from "@/lib/storage";
+import {
+  loadState,
+  removeState,
+  saveState,
+  STORAGE_KEYS,
+} from "@/lib/storage";
 import { usePathname, useRouter } from "next/navigation";
 import type {
   CSSProperties,
@@ -36,6 +46,7 @@ import { useEffect, useRef, useState } from "react";
 
 type VoiceState = "idle" | "requesting" | "listening" | "uploading" | "error";
 type VoiceButtonPosition = { x: number; y: number };
+type VoicePanelPosition = { x: number; y: number };
 type DragGesture = {
   pointerId: number;
   startX: number;
@@ -43,6 +54,15 @@ type DragGesture = {
   originX: number;
   originY: number;
   moved: boolean;
+};
+type PanelDragGesture = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+  baseLeft: number;
+  baseTop: number;
 };
 type AgentLogMessage = {
   id: string;
@@ -68,6 +88,26 @@ const PAGE_LABELS: Record<string, string> = {
   "/result": "文书编辑",
   "/batch": "批量生成",
   "/library": "申请项目",
+};
+const DOMAIN_CAPABILITY_LABELS: Record<string, string> = {
+  "person.create": "新增人物",
+  "person.select": "选择人物",
+  "background.select": "选择背景",
+  "background.patch": "更新背景",
+  "application_project.create": "记录申请项目",
+  "application_project.select": "选择申请项目",
+  "story.create": "创建故事访谈",
+  "story.select": "选择故事",
+  "story.reply": "提交故事回答",
+  "story.patch": "更新故事素材",
+  "essay_branch.create": "创建新文书",
+  "project.create": "创建文书项目",
+  "project.patch": "更新文书项目",
+  "project.analyze": "分析文书项目",
+  "project.outline": "生成中文大纲",
+  "project.draft": "生成英文草稿",
+  "project.review": "审核英文草稿",
+  "batch.create": "创建批量任务",
 };
 
 function clampPosition(
@@ -110,12 +150,15 @@ export default function VoiceInputButton({
   const router = useRouter();
   const pathname = usePathname()?.replace(/\/$/, "") || "/";
   const dragHandleRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const recordButtonRef = useRef<HTMLButtonElement>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const realtimeSessionRef = useRef<RealtimeVoiceSession | null>(null);
   const dragGestureRef = useRef<DragGesture | null>(null);
+  const panelDragGestureRef = useRef<PanelDragGesture | null>(null);
   const positionRef = useRef<VoiceButtonPosition | null>(null);
+  const panelPositionRef = useRef<VoicePanelPosition>({ x: 0, y: 0 });
   const suppressClickRef = useRef(false);
   const mountedRef = useRef(true);
   const logBoxRef = useRef<HTMLDivElement>(null);
@@ -134,6 +177,9 @@ export default function VoiceInputButton({
   const lastPathnameRef = useRef(pathname);
   const lastPageStatusRef = useRef("");
   const [position, setPosition] = useState<VoiceButtonPosition | null>(null);
+  const [panelPosition, setPanelPosition] =
+    useState<VoicePanelPosition>({ x: 0, y: 0 });
+  const [panelDragging, setPanelDragging] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [state, setState] = useState<VoiceState>("idle");
   const [statusMessage, setStatusMessage] = useState("打开语音输入");
@@ -169,6 +215,17 @@ export default function VoiceInputButton({
       positionRef.current = nextPosition;
       setPosition(nextPosition);
     }
+    const savedPanelPosition = loadState<VoicePanelPosition>(
+      STORAGE_KEYS.voicePanelPosition,
+    );
+    if (
+      savedPanelPosition &&
+      Number.isFinite(savedPanelPosition.x) &&
+      Number.isFinite(savedPanelPosition.y)
+    ) {
+      panelPositionRef.current = savedPanelPosition;
+      setPanelPosition(savedPanelPosition);
+    }
 
     const savedHistory = loadState<AgentLogMessage[]>(
       STORAGE_KEYS.agentHistory,
@@ -184,6 +241,13 @@ export default function VoiceInputButton({
     const nextSpeechEnabled = savedSpeechEnabled ?? true;
     speechEnabledRef.current = nextSpeechEnabled;
     setSpeechEnabled(nextSpeechEnabled);
+    const savedDomainPending = loadState<DomainAgentResponse>(
+      STORAGE_KEYS.domainPending,
+    );
+    if (savedDomainPending?.capability) {
+      setDomainPending(savedDomainPending);
+      setDomainPendingTranscript(savedDomainPending.transcript || "");
+    }
 
     const keepInViewport = () => {
       const currentElement = dragHandleRef.current;
@@ -225,19 +289,33 @@ export default function VoiceInputButton({
   useEffect(() => {
     const pathChanged = lastPathnameRef.current !== pathname;
     lastPathnameRef.current = pathname;
+    let followupTimer = 0;
     const timer = window.setTimeout(() => {
       setPendingAction(null);
-      void restorePendingAgentFocus();
-      if (pathChanged && realtimeSessionRef.current) {
-        const label = focusInitialVoiceControl();
-        speakFeedbackRef.current(
-          label
-            ? `已进入${PAGE_LABELS[pathname] || "新页面"}。当前请填写“${label}”。`
-            : `已进入${PAGE_LABELS[pathname] || "新页面"}。请说出下一步操作。`,
-        );
-      }
+      followupTimer = window.setTimeout(async () => {
+        const opened = restorePendingAgentSection();
+        if (opened) {
+          await new Promise((resolve) => window.setTimeout(resolve, 120));
+        }
+        const restored = await restorePendingAgentFocus();
+        if (
+          pathChanged &&
+          realtimeSessionRef.current &&
+          !restored
+        ) {
+          const label = focusInitialVoiceControl();
+          speakFeedbackRef.current(
+            label
+              ? `已进入${PAGE_LABELS[pathname] || "新页面"}。当前请填写“${label}”。`
+              : `已进入${PAGE_LABELS[pathname] || "新页面"}。请说出下一步操作。`,
+          );
+        }
+      }, 120);
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(followupTimer);
+    };
   }, [pathname]);
 
   useEffect(() => {
@@ -277,6 +355,29 @@ export default function VoiceInputButton({
 
   useEffect(() => {
     if (!panelOpen) return;
+    const timer = window.setTimeout(() => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const current = panelPositionRef.current;
+      const rect = panel.getBoundingClientRect();
+      const baseLeft = rect.left - current.x;
+      const baseTop = rect.top - current.y;
+      const next = {
+        x: Math.min(
+          window.innerWidth - 8 - rect.width - baseLeft,
+          Math.max(8 - baseLeft, current.x),
+        ),
+        y: Math.min(
+          window.innerHeight - 8 - rect.height - baseTop,
+          Math.max(8 - baseTop, current.y),
+        ),
+      };
+      if (next.x !== current.x || next.y !== current.y) {
+        panelPositionRef.current = next;
+        setPanelPosition(next);
+        saveState(STORAGE_KEYS.voicePanelPosition, next);
+      }
+    }, 0);
     let cancelled = false;
     void apiFetch<AgentPendingAction | null>("/api/agent/actions/current")
       .then((pending) => {
@@ -285,6 +386,7 @@ export default function VoiceInputButton({
       .catch(() => undefined);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [panelOpen, pathname]);
 
@@ -713,6 +815,24 @@ export default function VoiceInputButton({
       setPanelOpen(false);
       return;
     }
+    if (
+      /(?:创建|新建|从头做|从头创建).*(?:背景|人物资料)/.test(
+        normalizedCommand,
+      )
+    ) {
+      const message =
+        "已切换到背景资料。请从姓名开始逐项说，我会自动保存并推进到项目、故事和文书。";
+      appendLog("assistant", message);
+      speakFeedback(message);
+      if (pathname !== "/profile") router.push("/profile");
+      window.setTimeout(() => {
+        const label = focusInitialVoiceControl();
+        if (label) {
+          speakFeedback(`当前请填写“${label}”。`);
+        }
+      }, 350);
+      return;
+    }
     if (domainPending) {
       if (/重复|再说|没听清|没听懂|你说什么/.test(transcript)) {
         appendLog("assistant", domainPending.message);
@@ -733,6 +853,8 @@ export default function VoiceInputButton({
         cancelDomainAction();
         return;
       }
+      await submitDomainTranscript(transcript, "voice", false);
+      return;
     }
     if (shouldUseDomainAgent(transcript, pathname)) {
       await submitDomainTranscript(transcript, "voice", false);
@@ -794,26 +916,49 @@ export default function VoiceInputButton({
       const response = await sendDomainCommand(
         transcript,
         agentHistoryForRequest(logMessagesRef.current),
-        { confirmed, source },
+        {
+          confirmed,
+          source,
+          pending: domainPending,
+        },
       );
       appendLog("assistant", response.message);
       speakFeedback(response.message);
       applyDomainResolved(response.resolved);
+      if (response.capability) {
+        const target = domainNavigationTarget(response);
+        clearPendingAgentTargets();
+        setPendingAgentFocus(target.focusKey || "");
+        setPendingAgentSection(target.section || "");
+        if (target.path === pathname) {
+          window.setTimeout(async () => {
+            const opened = restorePendingAgentSection();
+            if (opened) {
+              await new Promise((resolve) =>
+                window.setTimeout(resolve, 100),
+              );
+            }
+            await restorePendingAgentFocus();
+          }, 80);
+        } else {
+          router.push(target.path);
+        }
+      }
       if (response.status === "confirmation_required") {
         setDomainPending(response);
+        saveState(STORAGE_KEYS.domainPending, response);
+        setDomainPendingTranscript(transcript);
+        return;
+      }
+      if (response.status === "needs_input") {
+        setDomainPending(response);
+        saveState(STORAGE_KEYS.domainPending, response);
         setDomainPendingTranscript(transcript);
         return;
       }
       setDomainPending(null);
+      removeState(STORAGE_KEYS.domainPending);
       setDomainPendingTranscript("");
-      if (response.status === "executed") {
-        const resolvedBatch = response.resolved.batch_id;
-        router.push(
-          typeof resolvedBatch === "string" && resolvedBatch
-            ? "/batch"
-            : "/library",
-        );
-      }
     } catch (error) {
       const message = readableError(
         error,
@@ -875,16 +1020,25 @@ export default function VoiceInputButton({
     const history = agentHistoryForRequest(logMessagesRef.current);
     appendLog("user", transcript);
     if (domainPending) {
-      if (/确认|执行|继续/.test(transcript)) {
+      if (/重复|再说|没听清|没听懂|你说什么/.test(transcript)) {
+        appendLog("assistant", domainPending.message);
+        speakFeedback(domainPending.message);
+        setBusy(false);
+        return;
+      }
+      if (/确认|确定|执行|继续|好的|可以|是的|没问题/.test(transcript)) {
         await confirmDomainAction();
         setBusy(false);
         return;
       }
-      if (/取消|不要|停止/.test(transcript)) {
+      if (/取消|不要|不用|停止|算了|不执行/.test(transcript)) {
         cancelDomainAction();
         setBusy(false);
         return;
       }
+      await submitDomainTranscript(transcript, "text", false);
+      setBusy(false);
+      return;
     }
     if (shouldUseDomainAgent(transcript, pathname)) {
       await submitDomainTranscript(transcript, "text", false);
@@ -997,6 +1151,7 @@ export default function VoiceInputButton({
 
   function cancelDomainAction() {
     setDomainPending(null);
+    removeState(STORAGE_KEYS.domainPending);
     setDomainPendingTranscript("");
     appendLog("system", "已取消实例操作。");
     speakFeedback("已取消实例操作。");
@@ -1082,6 +1237,79 @@ export default function VoiceInputButton({
     setDragging(false);
   }
 
+  function beginPanelDrag(event: ReactPointerEvent<HTMLElement>) {
+    const target = event.target as HTMLElement;
+    if (
+      event.button !== 0 ||
+      target.closest("button, a, input, textarea, select")
+    ) {
+      return;
+    }
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    panelDragGestureRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: panelPosition.x,
+      originY: panelPosition.y,
+      baseLeft: rect.left - panelPosition.x,
+      baseTop: rect.top - panelPosition.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPanelDragging(true);
+    event.preventDefault();
+  }
+
+  function movePanelDrag(event: ReactPointerEvent<HTMLElement>) {
+    const gesture = panelDragGestureRef.current;
+    const panel = panelRef.current;
+    if (!gesture || !panel || gesture.pointerId !== event.pointerId) return;
+    const rect = panel.getBoundingClientRect();
+    const margin = 8;
+    const minX = margin - gesture.baseLeft;
+    const maxX =
+      window.innerWidth - margin - rect.width - gesture.baseLeft;
+    const minY = margin - gesture.baseTop;
+    const maxY =
+      window.innerHeight - margin - rect.height - gesture.baseTop;
+    const next = {
+      x: Math.min(
+        Math.max(minX, maxX),
+        Math.max(Math.min(minX, maxX), gesture.originX + event.clientX - gesture.startX),
+      ),
+      y: Math.min(
+        Math.max(minY, maxY),
+        Math.max(Math.min(minY, maxY), gesture.originY + event.clientY - gesture.startY),
+      ),
+    };
+    panelPositionRef.current = next;
+    setPanelPosition(next);
+    event.preventDefault();
+  }
+
+  function endPanelDrag(event: ReactPointerEvent<HTMLElement>) {
+    const gesture = panelDragGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    panelDragGestureRef.current = null;
+    setPanelDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    saveState(
+      STORAGE_KEYS.voicePanelPosition,
+      panelPositionRef.current,
+    );
+  }
+
+  function cancelPanelDrag(event: ReactPointerEvent<HTMLElement>) {
+    const gesture = panelDragGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    panelDragGestureRef.current = null;
+    setPanelDragging(false);
+  }
+
   const listening = state === "listening";
   const activeState =
     state === "requesting" || state === "uploading" ? "requesting" : state;
@@ -1098,11 +1326,24 @@ export default function VoiceInputButton({
     <>
       {panelOpen ? (
         <section
+          ref={panelRef}
           className="voice-agent-panel"
+          style={{
+            transform: `translate(${panelPosition.x}px, ${panelPosition.y}px)`,
+          }}
           data-agent-ignore="true"
           aria-label="GradPilot 语音操作助手"
         >
-          <header className="voice-agent-header">
+          <header
+            className={`voice-agent-header ${
+              panelDragging ? "is-dragging" : ""
+            }`}
+            title="拖动语音窗口"
+            onPointerDown={beginPanelDrag}
+            onPointerMove={movePanelDrag}
+            onPointerUp={endPanelDrag}
+            onPointerCancel={cancelPanelDrag}
+          >
             <div className="voice-agent-heading">
               <span className="voice-agent-mark">
                 <Icon name="spark" size={18} />
@@ -1242,14 +1483,18 @@ export default function VoiceInputButton({
           {domainPending ? (
             <div className="voice-agent-confirm" role="alert">
               <div>
-                <strong>实例操作需要确认</strong>
+                <strong>
+                  {domainPending.status === "needs_input"
+                    ? "等待补充信息"
+                    : "需要确认"}
+                </strong>
                 <p>{domainPending.message}</p>
                 {domainPending.capability ? (
                   <p>
-                    操作：{domainPending.capability.name}
-                    {Object.keys(domainPending.arguments).length
-                      ? ` · ${JSON.stringify(domainPending.arguments)}`
-                      : ""}
+                    当前目标：
+                    {DOMAIN_CAPABILITY_LABELS[
+                      domainPending.capability.name
+                    ] || "继续当前流程"}
                   </p>
                 ) : null}
               </div>
@@ -1261,13 +1506,15 @@ export default function VoiceInputButton({
                 >
                   取消
                 </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void confirmDomainAction()}
-                >
-                  确认执行
-                </button>
+                {domainPending.status === "confirmation_required" ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void confirmDomainAction()}
+                  >
+                    确认执行
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -1352,6 +1599,7 @@ export default function VoiceInputButton({
                 setLogMessages([]);
                 setPendingAction(null);
                 setDomainPending(null);
+                removeState(STORAGE_KEYS.domainPending);
                 setDomainPendingTranscript("");
               }}
             >

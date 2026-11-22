@@ -170,6 +170,35 @@ SELECT_VALUE_ALIASES = {
         "ml": "Motivation Letter",
     },
 }
+REQUIRED_MISSING_KEYS = {
+    "profile_id",
+    "analysis_id",
+    "session_id",
+    "story_round",
+    "draft",
+    "resume",
+    "resume_file",
+    "answer",
+    "instruction",
+    "batch_id",
+    "item_id",
+    "index",
+    "path",
+    "capability",
+    "operation",
+    "action_id",
+    "page",
+}
+NEXT_STEP_HINTS = {
+    "/profile": "背景必填项完成后，可以说“继续项目分析”或“进入批量生成”。",
+    "/program": "项目必填项完成后，可以说“开始项目分析”。",
+    "/story": "回答完成后，可以说“发送回答”。",
+    "/result": "可以继续说“生成大纲”“生成草稿”或“审核草稿”。",
+    "/batch": "方向信息完整后，可以说“开始批量生成”。",
+    "/library": (
+        "可以继续记录申请项目、开始故事，或生成当前文书。"
+    ),
+}
 
 
 def _json(value: object) -> str:
@@ -1327,6 +1356,29 @@ def _missing_message(
     return f"{action_label}还不能执行，需要补充：{labels}{suffix}。"
 
 
+def _filter_model_missing_fields(
+    context: AgentPageContext,
+    fields: List[AgentMissingField],
+) -> List[AgentMissingField]:
+    controls = {control.key: control for control in context.controls}
+    filtered: List[AgentMissingField] = []
+    for field in fields:
+        target = field.target_key or ""
+        control = controls.get(target)
+        if field.key in REQUIRED_MISSING_KEYS:
+            filtered.append(field)
+        elif control is not None and control.required:
+            filtered.append(field)
+    return filtered
+
+
+def _next_step_hint(context: AgentPageContext) -> str:
+    return NEXT_STEP_HINTS.get(
+        context.path,
+        "可以继续说“下一步”获取当前可执行的操作。",
+    )
+
+
 async def _response_from_plan(
     owner_id: str,
     plan: AgentPlan,
@@ -1344,7 +1396,9 @@ async def _response_from_plan(
         store.get_pending_agent_action(owner_id),
         context,
     )
-    capability = plan.capability or infer_capability(transcript, context)
+    capability = plan.capability
+    if capability is None and not plan.missing_fields:
+        capability = infer_capability(transcript, context)
     if capability is None and existing_pending is not None:
         capability = AgentCapabilityCall(
             name=existing_pending.capability,
@@ -1443,7 +1497,12 @@ async def _response_from_plan(
         if focus is not None:
             ui_actions = _dedupe_ui_actions([*ui_actions, focus])
 
-    effective_missing = missing or plan.missing_fields
+    model_missing = _filter_model_missing_fields(
+        context,
+        plan.missing_fields,
+    )
+    dropped_optional_missing = bool(plan.missing_fields) and not model_missing
+    effective_missing = missing or model_missing
     next_field = (
         effective_missing[0].target_key
         if effective_missing
@@ -1470,6 +1529,20 @@ async def _response_from_plan(
                 capability.name if capability else "",
                 missing,
             )
+    elif (
+        capability is None
+        and dropped_optional_missing
+        and not effective_missing
+    ):
+        message = (
+            "当前没有额外的必填项。项目官网资料等选填内容可以留空；"
+            "你可以直接说下一步操作。"
+        )
+    elif status == "confirmation_required" and capability is not None:
+        message = (
+            f"必填信息已齐全。下一步是执行“{_capability_label(capability.name)}”。"
+            "请说“确认”执行，或说“取消”。"
+        )
     elif status in {"answered", "ready"}:
         next_focus = next(
             (action for action in ui_actions if action.type == "focus"),
@@ -1484,6 +1557,11 @@ async def _response_from_plan(
                 f"{message.rstrip('。')}。"
                 f"下一步请填写“{next_control.label}”。"
             )
+        elif (
+            next_control is None
+            and any(action.type == "fill" for action in ui_actions)
+        ):
+            message = f"{message.rstrip('。')}。{_next_step_hint(context)}"
     if len(message) > MAX_AGENT_MESSAGE_CHARS:
         message = f"{message[: MAX_AGENT_MESSAGE_CHARS - 3].rstrip()}..."
     return AgentCommandResponse(

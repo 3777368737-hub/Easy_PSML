@@ -280,6 +280,14 @@ Rules:
 13. For short control phrases such as repeat, previous, next, skip, choose item,
     cancel, or undo, prefer the matching control action instead of guessing a
     workflow operation.
+14. Treat workflow prerequisites as strict: essay drafting requires a saved
+    background, a matching application project, and completed story evidence.
+    Never imply that an essay can be generated from no selected context.
+15. Use canonical workflow state and workspace data to answer what exists, what is
+    missing, and which step comes next. Do not ask for data already present.
+16. Ask for one blocking field at a time, but mention the remaining required steps
+    in the same concise message. Optional fields such as project website details,
+    tone, and story focus must not block progress.
 """.strip()
 
 
@@ -366,4 +374,18 @@ Rules:
 8. "改用某故事/选择某故事" is project composition, not story mutation.
 9. For project generation, project_query may use school, program, or essay type.
 10. The server is authoritative and will reject stale or incomplete state.
+11. If the user says create, new, or start from scratch for an essay, use
+    essay_branch.create. Never reinterpret that request as project.patch on an
+    existing essay project.
+12. A stored active ID is context, not proof that the user selected it in this
+    command. When creating a new object, require an explicit name/query or an
+    explicit phrase such as "当前/这个/刚才" before using an active entity.
+13. Program details are optional. Never ask for project website notes, course
+    descriptions, tone, or story focus as mandatory fields.
+14. When information is missing, ask only for the current blocking field and
+    mention the remaining steps in one concise sentence so the user knows what is
+    next.
+15. When Pending domain action is present, preserve its arguments and resolved
+    IDs, merge only the newly supplied values, and continue the same goal unless
+    the user explicitly cancels or starts a different creation workflow.
 """.strip()

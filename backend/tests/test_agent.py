@@ -13,6 +13,7 @@ from app.errors import UpstreamServiceError
 from app.main import app
 from app.schemas import (
     AgentCapabilityCall,
+    AgentMissingField,
     AgentPlan,
     AgentUiAction,
     ProfileData,
@@ -599,7 +600,7 @@ class AgentTests(unittest.TestCase):
             },
         )
         self.assertEqual(repeated.status_code, 200, repeated.text)
-        self.assertIn("请确认", repeated.json()["message"])
+        self.assertIn("请说“确认”", repeated.json()["message"])
 
         confirmed = self.client.post(
             "/api/agent/text",
@@ -672,6 +673,36 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(body["status"], "answered")
         self.assertEqual(body["intent"], "clarify")
         self.assertIn("没有理解", body["message"])
+
+    def test_optional_program_details_is_never_requested_as_required(self) -> None:
+        profile = agent.get_store().save_profile(OWNER_A, ProfileData())
+        context = self.complete_program_context(profile.id)
+        agent.qwen_client = FakeQwenClient(
+            AgentPlan(
+                message="请补充项目官网资料。",
+                intent="clarify",
+                missing_fields=[
+                    AgentMissingField(
+                        key="program_details",
+                        label="项目官网资料",
+                        target_key="program-program_details",
+                    )
+                ],
+            )
+        )
+        response = self.client.post(
+            "/api/agent/text",
+            headers=self.headers,
+            json={
+                "transcript": "继续完善项目信息",
+                "context": context,
+                "history": [],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertFalse(body["missing_fields"])
+        self.assertIn("选填内容可以留空", body["message"])
 
     def test_offline_library_form_open_uses_semantic_section(self) -> None:
         context = copy.deepcopy(CONTEXT)

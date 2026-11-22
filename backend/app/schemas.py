@@ -773,6 +773,9 @@ class DomainAgentRequest(BaseModel):
     active_application_project_id: str = Field(default="", max_length=128)
     active_story_id: str = Field(default="", max_length=128)
     active_project_id: str = Field(default="", max_length=128)
+    pending_capability: Optional[str] = Field(default=None, max_length=120)
+    pending_arguments: Dict[str, Any] = Field(default_factory=dict)
+    pending_resolved: Dict[str, Any] = Field(default_factory=dict)
     confirmed: bool = False
     source: Literal["voice", "text"] = "text"
 

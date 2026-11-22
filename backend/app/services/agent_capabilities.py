@@ -412,6 +412,9 @@ def canonical_workflow_snapshot(
     store: Optional[SQLiteStore] = None,
 ) -> Dict[str, Any]:
     db = store or get_store()
+    from app.services.domain_store import DomainStore
+
+    workspace = DomainStore(db.path).workspace_snapshot(owner_id)
     profile = (
         db.get_profile(context.ids.profile_id, owner_id)
         if context.ids.profile_id
@@ -469,6 +472,75 @@ def canonical_workflow_snapshot(
             }
             for item in batches
         ],
+        "workspace": {
+            "persons": [
+                {
+                    "id": person.id,
+                    "name": person.display_name,
+                    "background_count": person.background_count,
+                }
+                for person in workspace.persons
+            ],
+            "backgrounds": [
+                {
+                    "id": background.id,
+                    "person_id": background.person_id,
+                    "resume_name": background.resume_name,
+                    "status": background.status,
+                    "version": background.version,
+                    "current_university": (
+                        background.profile.basic_profile.current_university
+                    ),
+                    "major": background.profile.basic_profile.major,
+                    "target_field": (
+                        background.profile.basic_profile.target_field
+                    ),
+                }
+                for background in workspace.backgrounds
+            ],
+            "application_projects": [
+                {
+                    "id": project.id,
+                    "background_id": project.background_instance_id,
+                    "school_name": project.school_name,
+                    "program_name": project.program_name,
+                    "program_details_present": bool(
+                        project.program_details.strip()
+                    ),
+                    "story_count": project.story_count,
+                    "essay_count": project.essay_count,
+                }
+                for project in workspace.application_projects
+            ],
+            "stories": [
+                {
+                    "id": story.id,
+                    "background_id": story.background_instance_id,
+                    "application_project_id": story.application_project_id,
+                    "title": story.title,
+                    "status": story.status,
+                    "round_no": story.round_no,
+                    "focus": story.focus,
+                }
+                for story in workspace.stories
+            ],
+            "essay_projects": [
+                {
+                    "id": project.id,
+                    "background_id": project.background_instance_id,
+                    "application_project_id": project.application_project_id,
+                    "school_name": project.program.school_name,
+                    "program_name": project.program.program_name,
+                    "essay_type": project.program.essay_type,
+                    "status": project.status,
+                    "current_step": project.current_step,
+                    "story_instance_ids": project.story_instance_ids,
+                    "has_outline": bool(project.outline),
+                    "has_draft": bool(project.draft),
+                }
+                for project in workspace.projects
+            ],
+        },
     }
 
 

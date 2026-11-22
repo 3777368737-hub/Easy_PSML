@@ -904,6 +904,7 @@ export default function WorkbenchPage() {
                     ))}
                   </select>
                   <input
+                    id="workbench-new-person-name"
                     aria-label="新人物姓名"
                     data-agent-autofocus="true"
                     value={personName}
@@ -958,8 +959,27 @@ export default function WorkbenchPage() {
                 return (
                   <div
                     key={background.id}
-                    className="workbench-source-item"
+                    data-agent-key={`background-${background.id}`}
+                    data-agent-focusable="true"
+                    tabIndex={-1}
+                    className={`workbench-source-item ${
+                      background.id === selectedBackgroundId
+                        ? "is-selected"
+                        : ""
+                    }`}
                     draggable
+                    onClick={() => {
+                      setSelectedPersonId(background.person_id);
+                      setSelectedBackgroundId(background.id);
+                      saveState(
+                        STORAGE_KEYS.activePersonId,
+                        background.person_id,
+                      );
+                      saveState(
+                        STORAGE_KEYS.activeBackgroundId,
+                        background.id,
+                      );
+                    }}
                     onDragStart={(event) =>
                       startDrag(event, {
                         type: "background",
@@ -1106,8 +1126,22 @@ export default function WorkbenchPage() {
                 return (
                   <div
                     key={project.id}
-                    className="workbench-source-item"
+                    data-agent-key={`application-project-${project.id}`}
+                    data-agent-focusable="true"
+                    tabIndex={-1}
+                    className={`workbench-source-item ${
+                      project.id === selectedApplicationProjectId
+                        ? "is-selected"
+                        : ""
+                    }`}
                     draggable
+                    onClick={() => {
+                      setSelectedApplicationProjectId(project.id);
+                      saveState(
+                        STORAGE_KEYS.activeApplicationProjectId,
+                        project.id,
+                      );
+                    }}
                     onDragStart={(event) =>
                       startDrag(event, {
                         type: "application-project",
@@ -1203,14 +1237,20 @@ export default function WorkbenchPage() {
                 return (
                   <div
                     key={story.id}
+                    data-agent-key={`story-${story.id}`}
+                    data-agent-focusable="true"
+                    tabIndex={-1}
                     className={`workbench-source-item ${
                       story.status === "ready" ? "is-ready" : ""
-                    }`}
+                    } ${story.id === selectedStoryId ? "is-selected" : ""}`}
                     draggable={story.status === "ready" && Boolean(project)}
                     onDragStart={(event) =>
                       startDrag(event, { type: "story", id: story.id })
                     }
-                    onClick={() => setSelectedStoryId(story.id)}
+                    onClick={() => {
+                      setSelectedStoryId(story.id);
+                      saveState(STORAGE_KEYS.activeStoryId, story.id);
+                    }}
                   >
                     <span className="drag-grip">
                       {story.status === "ready" ? "⋮⋮" : "·"}
