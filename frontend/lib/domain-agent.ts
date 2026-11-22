@@ -19,6 +19,12 @@ export type DomainAgentResponse = {
   arguments: Record<string, unknown>;
   resolved: Record<string, unknown>;
   result: Record<string, unknown>;
+  missing_fields: Array<{
+    key: string;
+    label: string;
+    target_key?: string | null;
+  }>;
+  next_field: string | null;
   needs_confirmation: boolean;
   source: "voice" | "text";
 };
@@ -30,17 +36,48 @@ export type DomainNavigationTarget = {
 };
 
 export function domainContextFromStorage() {
+  const activeBackgroundId =
+    loadState<string>(STORAGE_KEYS.activeBackgroundId) || "";
+  const activePersonId =
+    loadState<string>(STORAGE_KEYS.activePersonId) || "";
+  const activeApplicationProjectId =
+    loadState<string>(STORAGE_KEYS.activeApplicationProjectId) || "";
+  const activeStoryId =
+    loadState<string>(STORAGE_KEYS.activeStoryId) || "";
+  const activeProjectId =
+    loadState<string>(STORAGE_KEYS.activeProjectId) || "";
+  const pathname =
+    typeof window === "undefined"
+      ? ""
+      : window.location.pathname.replace(/\/$/, "") || "/";
+  const selected = (key: string) =>
+    typeof document !== "undefined" &&
+    Boolean(
+      document.querySelector(
+        `[data-agent-key="${CSS.escape(key)}"].is-selected`,
+      ),
+    );
   return {
     active_person_id:
-      loadState<string>(STORAGE_KEYS.activePersonId) || "",
-    active_background_id:
-      loadState<string>(STORAGE_KEYS.activeBackgroundId) || "",
-    active_application_project_id:
-      loadState<string>(STORAGE_KEYS.activeApplicationProjectId) || "",
-    active_story_id:
-      loadState<string>(STORAGE_KEYS.activeStoryId) || "",
-    active_project_id:
-      loadState<string>(STORAGE_KEYS.activeProjectId) || "",
+      activePersonId,
+    active_background_id: activeBackgroundId,
+    active_application_project_id: activeApplicationProjectId,
+    active_story_id: activeStoryId,
+    active_project_id: activeProjectId,
+    allow_stored_person:
+      pathname === "/profile" ||
+      (Boolean(activeBackgroundId) &&
+        selected(`background-${activeBackgroundId}`)),
+    allow_stored_background:
+      pathname === "/profile" ||
+      (Boolean(activeBackgroundId) &&
+        selected(`background-${activeBackgroundId}`)),
+    allow_stored_application_project:
+      Boolean(activeApplicationProjectId) &&
+      selected(`application-project-${activeApplicationProjectId}`),
+    allow_stored_story:
+      Boolean(activeStoryId) && selected(`story-${activeStoryId}`),
+    allow_stored_project: pathname === "/result" && Boolean(activeProjectId),
   };
 }
 
@@ -63,6 +100,8 @@ export async function sendDomainCommand(
       pending_capability: options.pending?.capability?.name || null,
       pending_arguments: options.pending?.arguments || {},
       pending_resolved: options.pending?.resolved || {},
+      pending_missing_fields: options.pending?.missing_fields || [],
+      pending_next_field: options.pending?.next_field || null,
       confirmed: options.confirmed || false,
       source: options.source || "text",
     }),
@@ -233,6 +272,14 @@ export function domainNavigationTarget(
   }
   if (capability === "essay_branch.create") {
     if (response.status === "executed") return { path: "/result" };
+    if (
+      response.resolved.project_id &&
+      ["existing_branch_choice", "resume_generation"].includes(
+        response.next_field || "",
+      )
+    ) {
+      return { path: "/result" };
+    }
     const backgroundMissing = !response.resolved.background_id;
     const projectMissing = !response.resolved.application_project_id;
     const storyMissing =

@@ -3,11 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from app.errors import UpstreamServiceError
 from app.schemas import (
     AgentCapabilityCall,
     AgentConversationMessage,
+    AgentMissingField,
     AgentPlan,
     BasicProfile,
     DomainAgentRequest,
@@ -181,11 +183,42 @@ class DomainAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("选择人物背景", response.message)
         self.assertIn("科研简历", response.message)
 
+    async def test_stored_active_background_requires_verified_selection(self) -> None:
+        domain_agent.domain_qwen = FailingDomainQwen()
+        unverified = await domain_agent.run_domain_command(
+            OWNER_A,
+            DomainAgentRequest(
+                transcript="创建新文书",
+                active_person_id=self.person.id,
+                active_background_id=self.background.id,
+                allow_stored_background=False,
+            ),
+        )
+        self.assertEqual(unverified.next_field, "background")
+
+        verified = await domain_agent.run_domain_command(
+            OWNER_A,
+            DomainAgentRequest(
+                transcript="创建新文书",
+                active_person_id=self.person.id,
+                active_background_id=self.background.id,
+                allow_stored_person=True,
+                allow_stored_background=True,
+            ),
+        )
+        self.assertNotEqual(verified.next_field, "background")
+        self.assertEqual(verified.resolved["background_id"], self.background.id)
+
     async def test_pending_essay_flow_keeps_selected_background(self) -> None:
         domain_agent.domain_qwen = FailingDomainQwen()
         first = await domain_agent.run_domain_command(
             OWNER_A,
             DomainAgentRequest(transcript="创建新文书"),
+        )
+        self.assertEqual(first.next_field, "background")
+        self.assertEqual(
+            first.missing_fields[0].key,
+            "background",
         )
         second = await domain_agent.run_domain_command(
             OWNER_A,
@@ -203,8 +236,50 @@ class DomainAgentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(second.arguments["background_query"], "科研简历")
         self.assertEqual(second.resolved["background_id"], self.background.id)
+        self.assertEqual(second.next_field, "application_project")
         self.assertNotIn("选择人物背景", second.message)
         self.assertIn("申请项目", second.message)
+
+    async def test_ambiguous_story_correction_replaces_story_slot(self) -> None:
+        plan = domain_agent._pending_plan(
+            DomainAgentRequest(
+                transcript="港科大 DDM 科研故事",
+                pending_capability="essay_branch.create",
+                pending_arguments={
+                    "background_query": "科研简历",
+                    "application_project_query": "DDM",
+                    "story_titles": ["科研故事"],
+                },
+                pending_next_field="story",
+                pending_missing_fields=[
+                    AgentMissingField(
+                        key="story",
+                        label="唯一匹配的已完成故事",
+                    )
+                ],
+            )
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(
+            plan.capability.arguments["story_titles"],
+            ["港科大 DDM 科研故事"],
+        )
+        self.assertNotIn("essay_type", plan.capability.arguments)
+
+    async def test_slot_value_starting_with_command_word_is_not_confirmation(self) -> None:
+        plan = domain_agent._pending_plan(
+            DomainAgentRequest(
+                transcript="继续教育项目",
+                pending_capability="essay_branch.create",
+                pending_arguments={},
+                pending_next_field="background",
+            )
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(
+            plan.capability.arguments["background_query"],
+            "继续教育项目",
+        )
 
     async def test_pending_background_correction_keeps_person_and_resume(self) -> None:
         domain_agent.domain_qwen = FakeDomainQwen(
@@ -272,6 +347,151 @@ class DomainAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             plan.capability.arguments["generate_after_create"]
         )
+
+    async def test_negated_phrases_do_not_reverse_user_intent(self) -> None:
+        self.assertTrue(
+            domain_agent._is_new_essay_intent(
+                "创建一篇新文书，不要修改旧文书"
+            )
+        )
+        create_only = domain_agent._new_essay_plan(
+            "只创建新文书，不要生成草稿"
+        )
+        self.assertIsNotNone(create_only)
+        self.assertFalse(
+            create_only.capability.arguments["generate_after_create"]
+        )
+        self.assertFalse(
+            domain_agent._is_new_essay_intent(
+                "不要创建新文书，只修改现有文书"
+            )
+        )
+
+    async def test_existing_essay_branch_offers_open_instead_of_retry_loop(self) -> None:
+        application_project = self.domain.create_application_project(
+            OWNER_A,
+            self.background.id,
+            "香港科技大学",
+            "DDM",
+            "",
+        )
+        story = self.domain.create_story(
+            OWNER_A,
+            self.background.id,
+            "科研故事",
+            application_project_id=application_project.id,
+            status="ready",
+            round_no=3,
+        )
+        existing = self.domain.create_project(
+            OWNER_A,
+            self.background.id,
+            [story.id],
+            ProgramContext(
+                school_name="香港科技大学",
+                program_name="DDM",
+                essay_type="Personal Statement",
+                word_limit=800,
+                prompt_text="Describe your preparation and goals.",
+                program_details="",
+            ),
+            application_project_id=application_project.id,
+        )
+        domain_agent.domain_qwen = FailingDomainQwen()
+        arguments = {
+            "background_instance_id": self.background.id,
+            "application_project_id": application_project.id,
+            "story_titles": ["科研故事"],
+            "essay_type": "Personal Statement",
+            "prompt_text": "Describe your preparation and goals.",
+        }
+        first = await domain_agent.run_domain_command(
+            OWNER_A,
+            DomainAgentRequest(
+                transcript="Describe your preparation and goals.",
+                pending_capability="essay_branch.create",
+                pending_arguments=arguments,
+                pending_next_field="prompt_text",
+            ),
+        )
+        self.assertEqual(first.status, "needs_input")
+        self.assertEqual(
+            first.next_field,
+            "existing_branch_choice",
+        )
+        self.assertEqual(first.resolved["project_id"], existing.id)
+
+        opened = await domain_agent.run_domain_command(
+            OWNER_A,
+            DomainAgentRequest(
+                transcript="打开现有",
+                pending_capability="essay_branch.create",
+                pending_arguments=first.arguments,
+                pending_resolved=first.resolved,
+                pending_next_field=first.next_field,
+            ),
+        )
+        self.assertEqual(opened.status, "executed")
+        self.assertEqual(opened.capability.name, "project.open")
+        self.assertEqual(opened.resolved["project_id"], existing.id)
+
+    async def test_partial_generation_resumes_existing_branch(self) -> None:
+        application_project = self.domain.create_application_project(
+            OWNER_A,
+            self.background.id,
+            "香港科技大学",
+            "DDM",
+            "",
+        )
+        project = self.domain.create_project(
+            OWNER_A,
+            self.background.id,
+            [],
+            ProgramContext(
+                school_name="香港科技大学",
+                program_name="DDM",
+                essay_type="Personal Statement",
+                word_limit=800,
+                prompt_text="Describe your preparation and goals.",
+                program_details="",
+            ),
+            application_project_id=application_project.id,
+        )
+        arguments = {
+            "existing_project_id": project.id,
+            "generate_after_create": True,
+        }
+        request = DomainAgentRequest(
+            transcript="继续",
+            pending_capability="essay_branch.create",
+            pending_arguments=arguments,
+            pending_resolved={
+                "background_id": self.background.id,
+                "project_id": project.id,
+            },
+            confirmed=True,
+        )
+        with patch.object(
+            domain_agent,
+            "_complete_created_essay",
+            new=AsyncMock(side_effect=UpstreamServiceError("temporary")),
+        ):
+            failed = await domain_agent.run_domain_command(OWNER_A, request)
+        self.assertEqual(failed.status, "needs_input")
+        self.assertEqual(failed.next_field, "resume_generation")
+        self.assertEqual(
+            failed.arguments["existing_project_id"],
+            project.id,
+        )
+
+        with patch.object(
+            domain_agent,
+            "_complete_created_essay",
+            new=AsyncMock(return_value=project),
+        ):
+            resumed = await domain_agent.run_domain_command(OWNER_A, request)
+        self.assertEqual(resumed.status, "executed")
+        self.assertEqual(resumed.resolved["project_id"], project.id)
 
     async def test_domain_agent_creates_project_bound_story(self) -> None:
         domain_agent.domain_qwen = FakeDomainQwen(

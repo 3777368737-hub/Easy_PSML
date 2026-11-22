@@ -1675,8 +1675,14 @@ class DomainStore:
             metadata=metadata or {},
         )
 
-    def workspace_snapshot(self, owner_id: str) -> WorkspaceSnapshotResponse:
-        self.sync_legacy_profiles(owner_id)
+    def workspace_snapshot(
+        self,
+        owner_id: str,
+        *,
+        sync_legacy: bool = True,
+    ) -> WorkspaceSnapshotResponse:
+        if sync_legacy:
+            self.sync_legacy_profiles(owner_id)
         return WorkspaceSnapshotResponse(
             persons=self.list_persons(owner_id),
             backgrounds=self.list_backgrounds(owner_id),

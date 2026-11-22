@@ -329,6 +329,7 @@ Registered capabilities:
 - project.create: {"background_query": string, "story_titles": [string],
   "school_name": string, "program_name": string, "essay_type": string,
   "word_limit": number, "prompt_text": string, "program_details": string}
+- project.open: {"project_query": string}
 - project.patch: {"project_query": string, "changes": object,
   "story_titles": [string]|null}
 - project.analyze: {"project_query": string}
@@ -388,4 +389,7 @@ Rules:
 15. When Pending domain action is present, preserve its arguments and resolved
     IDs, merge only the newly supplied values, and continue the same goal unless
     the user explicitly cancels or starts a different creation workflow.
+16. If an application project already has the requested PS/ML branch, do not
+    repeatedly retry creation. Offer to open the existing branch or switch to the
+    other essay type.
 """.strip()

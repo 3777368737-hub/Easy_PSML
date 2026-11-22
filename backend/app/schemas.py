@@ -776,6 +776,16 @@ class DomainAgentRequest(BaseModel):
     pending_capability: Optional[str] = Field(default=None, max_length=120)
     pending_arguments: Dict[str, Any] = Field(default_factory=dict)
     pending_resolved: Dict[str, Any] = Field(default_factory=dict)
+    pending_missing_fields: List[AgentMissingField] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    pending_next_field: Optional[str] = Field(default=None, max_length=120)
+    allow_stored_person: bool = False
+    allow_stored_background: bool = False
+    allow_stored_application_project: bool = False
+    allow_stored_story: bool = False
+    allow_stored_project: bool = False
     confirmed: bool = False
     source: Literal["voice", "text"] = "text"
 
@@ -794,6 +804,8 @@ class DomainCommandResponse(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
     resolved: Dict[str, Any] = Field(default_factory=dict)
     result: Dict[str, Any] = Field(default_factory=dict)
+    missing_fields: List[AgentMissingField] = Field(default_factory=list)
+    next_field: Optional[str] = Field(default=None, max_length=120)
     needs_confirmation: bool = False
     source: Literal["voice", "text"] = "text"
 

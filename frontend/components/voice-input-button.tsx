@@ -74,6 +74,11 @@ type LiveUtterance = {
   logId: string;
   text: string;
 };
+type StoredDomainPending = {
+  savedAt: number;
+  response: DomainAgentResponse;
+};
+const DOMAIN_PENDING_TTL_MS = 30 * 60 * 1000;
 
 const BAR_PROFILE = [
   0.32, 0.46, 0.62, 0.8, 1, 0.8, 0.62, 0.46, 0.32,
@@ -101,6 +106,7 @@ const DOMAIN_CAPABILITY_LABELS: Record<string, string> = {
   "story.reply": "提交故事回答",
   "story.patch": "更新故事素材",
   "essay_branch.create": "创建新文书",
+  "project.open": "打开现有文书",
   "project.create": "创建文书项目",
   "project.patch": "更新文书项目",
   "project.analyze": "分析文书项目",
@@ -136,6 +142,46 @@ function createLogId(): string {
     return crypto.randomUUID();
   }
   return `agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeControlPhrase(value: string): string {
+  return value
+    .replace(/[\s，。！？、,.!?;；:："'“”‘’（）()]+/g, "")
+    .toLowerCase();
+}
+
+function isExplicitConfirmation(value: string): boolean {
+  return /^(?:确认|确认执行|确定|确定执行|执行|开始吧|执行吧|好的?|可以|没问题|是的|对)$/.test(
+    normalizeControlPhrase(value),
+  );
+}
+
+function isExplicitCancellation(value: string): boolean {
+  return /^(?:取消|取消操作|不用了|不要|停止|算了|不执行)(?:谢谢)?$/.test(
+    normalizeControlPhrase(value),
+  );
+}
+
+function saveDomainPendingState(response: DomainAgentResponse): void {
+  saveState(STORAGE_KEYS.domainPending, {
+    savedAt: Date.now(),
+    response,
+  } satisfies StoredDomainPending);
+}
+
+function loadDomainPendingState(): DomainAgentResponse | null {
+  const stored = loadState<StoredDomainPending>(
+    STORAGE_KEYS.domainPending,
+  );
+  if (!stored || typeof stored.savedAt !== "number") {
+    if (stored) removeState(STORAGE_KEYS.domainPending);
+    return null;
+  }
+  if (Date.now() - stored.savedAt > DOMAIN_PENDING_TTL_MS) {
+    removeState(STORAGE_KEYS.domainPending);
+    return null;
+  }
+  return stored.response;
 }
 
 type VoiceInputButtonProps = {
@@ -241,9 +287,7 @@ export default function VoiceInputButton({
     const nextSpeechEnabled = savedSpeechEnabled ?? true;
     speechEnabledRef.current = nextSpeechEnabled;
     setSpeechEnabled(nextSpeechEnabled);
-    const savedDomainPending = loadState<DomainAgentResponse>(
-      STORAGE_KEYS.domainPending,
-    );
+    const savedDomainPending = loadDomainPendingState();
     if (savedDomainPending?.capability) {
       setDomainPending(savedDomainPending);
       setDomainPendingTranscript(savedDomainPending.transcript || "");
@@ -845,11 +889,25 @@ export default function VoiceInputButton({
         speakFeedback(message);
         return;
       }
-      if (/确认|确定|执行|继续|好的|可以|是的|没问题/.test(transcript)) {
+      if (
+        domainPending.status === "confirmation_required" &&
+        isExplicitConfirmation(transcript)
+      ) {
         await confirmDomainAction();
         return;
       }
-      if (/取消|不要|不用|停止|算了|不执行/.test(transcript)) {
+      if (
+        domainPending.status === "needs_input" &&
+        (isExplicitConfirmation(transcript) ||
+          /^(?:继续|下一步)$/.test(normalizeControlPhrase(transcript))) &&
+        !domainPending.arguments.existing_project_id
+      ) {
+        const message = `${domainPending.message} 请直接说出当前缺少的内容。`;
+        appendLog("assistant", message);
+        speakFeedback(message);
+        return;
+      }
+      if (isExplicitCancellation(transcript)) {
         cancelDomainAction();
         return;
       }
@@ -946,13 +1004,13 @@ export default function VoiceInputButton({
       }
       if (response.status === "confirmation_required") {
         setDomainPending(response);
-        saveState(STORAGE_KEYS.domainPending, response);
+        saveDomainPendingState(response);
         setDomainPendingTranscript(transcript);
         return;
       }
       if (response.status === "needs_input") {
         setDomainPending(response);
-        saveState(STORAGE_KEYS.domainPending, response);
+        saveDomainPendingState(response);
         setDomainPendingTranscript(transcript);
         return;
       }
@@ -1026,12 +1084,27 @@ export default function VoiceInputButton({
         setBusy(false);
         return;
       }
-      if (/确认|确定|执行|继续|好的|可以|是的|没问题/.test(transcript)) {
+      if (
+        domainPending.status === "confirmation_required" &&
+        isExplicitConfirmation(transcript)
+      ) {
         await confirmDomainAction();
         setBusy(false);
         return;
       }
-      if (/取消|不要|不用|停止|算了|不执行/.test(transcript)) {
+      if (
+        domainPending.status === "needs_input" &&
+        (isExplicitConfirmation(transcript) ||
+          /^(?:继续|下一步)$/.test(normalizeControlPhrase(transcript))) &&
+        !domainPending.arguments.existing_project_id
+      ) {
+        const message = `${domainPending.message} 请直接说出当前缺少的内容。`;
+        appendLog("assistant", message);
+        speakFeedback(message);
+        setBusy(false);
+        return;
+      }
+      if (isExplicitCancellation(transcript)) {
         cancelDomainAction();
         setBusy(false);
         return;
@@ -1158,7 +1231,13 @@ export default function VoiceInputButton({
   }
 
   async function confirmDomainAction() {
-    if (!domainPending || !domainPendingTranscript) return;
+    if (
+      !domainPending ||
+      domainPending.status !== "confirmation_required" ||
+      !domainPendingTranscript
+    ) {
+      return;
+    }
     setBusy(true);
     try {
       await submitDomainTranscript(
@@ -1489,6 +1568,14 @@ export default function VoiceInputButton({
                     : "需要确认"}
                 </strong>
                 <p>{domainPending.message}</p>
+                {domainPending.missing_fields?.length ? (
+                  <p>
+                    还需要：
+                    {domainPending.missing_fields
+                      .map((field) => field.label)
+                      .join("、")}
+                  </p>
+                ) : null}
                 {domainPending.capability ? (
                   <p>
                     当前目标：

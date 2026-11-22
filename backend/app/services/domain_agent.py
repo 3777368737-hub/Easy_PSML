@@ -9,6 +9,7 @@ from app.errors import AppError, UpstreamServiceError
 from app.schemas import (
     AgentCapabilityCall,
     AgentConversationMessage,
+    AgentMissingField,
     AgentPlan,
     BatchCreateRequest,
     DomainAgentRequest,
@@ -55,7 +56,7 @@ def _json(value: Any) -> str:
 
 
 def _catalog(domain: DomainStore, owner_id: str) -> Dict[str, Any]:
-    snapshot = domain.workspace_snapshot(owner_id)
+    snapshot = domain.workspace_snapshot(owner_id, sync_legacy=False)
     persons_by_id = {person.id: person for person in snapshot.persons}
     backgrounds_by_id = {
         background.id: background for background in snapshot.backgrounds
@@ -75,7 +76,7 @@ def _catalog(domain: DomainStore, owner_id: str) -> Dict[str, Any]:
             "has_person": bool(snapshot.persons),
             "has_background": bool(snapshot.backgrounds),
             "has_application_project": bool(snapshot.application_projects),
-            "has_ready_story": any(
+            "has_any_ready_story": any(
                 story.status == "ready" for story in snapshot.stories
             ),
             "has_essay_project": bool(snapshot.projects),
@@ -289,8 +290,18 @@ def _clean_answer(value: str) -> str:
 
 def _is_new_essay_intent(transcript: str) -> bool:
     text = _compact_text(transcript)
+    if re.search(
+        r"(?:不要|不用|别)(?:创建|新建|新增|从头|写一篇|做一篇|来一篇)",
+        text,
+    ):
+        return False
+    creation_text = re.sub(
+        r"(?:不要|不用|别|不是)(?:修改|更新|重写).*$",
+        "",
+        text,
+    )
     creation = any(
-        word in text
+        word in creation_text
         for word in (
             "创建",
             "新建",
@@ -305,11 +316,11 @@ def _is_new_essay_intent(transcript: str) -> bool:
         )
     )
     essay = any(
-        word in text
+        word in creation_text
         for word in ("文书", "个人陈述", "动机信", "ps", "ml")
     )
     modification = any(
-        word in text for word in ("修改", "更新", "改一下", "重写")
+        word in creation_text for word in ("修改", "更新", "改一下", "重写")
     )
     return creation and essay and not modification
 
@@ -340,9 +351,17 @@ def _new_essay_plan(transcript: str) -> Optional[AgentPlan]:
     if not _is_new_essay_intent(transcript):
         return None
     text = _compact_text(transcript)
-    generate_after_create = any(
-        word in text
-        for word in ("并生成", "直接生成", "生成结果", "出稿", "生成草稿")
+    generation_text = re.sub(
+        r"(?:不要|不用|别|不)(?:生成|出稿|生成结果|生成草稿).*$",
+        "",
+        text,
+    )
+    generate_after_create = (
+        not any(word in text for word in ("只创建", "仅创建", "不生成"))
+        and any(
+            word in generation_text
+            for word in ("并生成", "直接生成", "生成结果", "出稿", "生成草稿")
+        )
     )
     return AgentPlan(
         message=(
@@ -358,6 +377,40 @@ def _new_essay_plan(transcript: str) -> Optional[AgentPlan]:
         ),
         needs_confirmation=True,
     )
+
+
+def _looks_like_pending_interrupt(text: str) -> bool:
+    if text in {
+        "继续",
+        "下一步",
+        "重试",
+        "重新生成",
+        "打开",
+        "取消",
+    }:
+        return True
+    if re.match(
+        r"^(?:打开|进入|跳到|前往|去).*(?:人物|背景|项目|故事|文书|批量)",
+        text,
+    ):
+        return True
+    if re.match(
+        r"^(?:创建|新建|新增).*(?:人物|背景|项目|故事|文书|批量)",
+        text,
+    ):
+        return True
+    if re.match(
+        r"^(?:生成|分析|审核|重写).*(?:文书|草稿|大纲|结果|项目)",
+        text,
+    ):
+        return True
+    if re.match(
+        r"^(?:修改|更新|删除|选择|切换|记录|挖掘)"
+        r".*(?:人物|背景|项目|故事|文书|批量)",
+        text,
+    ):
+        return True
+    return False
 
 
 def _pending_plan(request: DomainAgentRequest) -> Optional[AgentPlan]:
@@ -380,25 +433,96 @@ def _pending_plan(request: DomainAgentRequest) -> Optional[AgentPlan]:
     answer = _clean_answer(request.transcript)
     if not answer:
         return None
-    if re.match(
-        r"^(?:创建|新建|添加|选择|切换|修改|更新|删除|打开|进入|"
-        r"生成|分析|审核|重写|开始|暂停|继续|重做|记录|挖掘)",
-        _compact_text(answer),
+    compact_answer = _compact_text(answer)
+    if (
+        capability == "essay_branch.create"
+        and arguments.get("existing_project_id")
+        and compact_answer
+        in {"继续", "继续生成", "继续执行", "重试", "重新生成"}
     ):
+        return AgentPlan(
+            message="继续从已创建的文书项目恢复生成。",
+            intent="operate",
+            capability=AgentCapabilityCall(
+                name=capability,
+                arguments=arguments,
+            ),
+            needs_confirmation=True,
+        )
+    if capability == "essay_branch.create" and arguments.get(
+        "existing_project_id"
+    ):
+        if any(
+            phrase in compact_answer
+            for phrase in ("打开现有", "查看现有", "打开这个", "查看这个")
+        ):
+            return AgentPlan(
+                message="打开现有文书。",
+                intent="navigate",
+                capability=AgentCapabilityCall(
+                    name="project.open",
+                    arguments={
+                        "project_id": arguments["existing_project_id"]
+                    },
+                ),
+            )
+        if any(
+            phrase in compact_answer
+            for phrase in ("改成ml", "生成ml", "动机信")
+        ):
+            arguments["essay_type"] = "Motivation Letter"
+            arguments.pop("existing_project_id", None)
+            return AgentPlan(
+                message="改为创建 Motivation Letter。",
+                intent="operate",
+                capability=AgentCapabilityCall(
+                    name=capability,
+                    arguments=arguments,
+                ),
+                needs_confirmation=True,
+            )
+    if _looks_like_pending_interrupt(compact_answer):
         return None
 
     if capability == "essay_branch.create":
-        if not (
+        requested_slot = request.pending_next_field or ""
+        if requested_slot == "background":
+            arguments.pop("background_instance_id", None)
+            arguments.pop("background_id", None)
+            arguments["background_query"] = answer
+        elif requested_slot == "application_project":
+            arguments.pop("application_project_id", None)
+            arguments["application_project_query"] = answer
+        elif requested_slot == "story":
+            arguments["story_titles"] = [answer]
+            arguments.pop("story_instance_ids", None)
+        elif requested_slot == "essay_type":
+            text = _compact_text(answer)
+            if text in {"ps", "personalstatement", "个人陈述"}:
+                arguments["essay_type"] = "Personal Statement"
+            elif text in {"ml", "motivationletter", "动机信"}:
+                arguments["essay_type"] = "Motivation Letter"
+            else:
+                arguments["essay_type"] = answer
+        elif requested_slot == "prompt_text":
+            arguments["prompt_text"] = answer
+        elif not (
             arguments.get("background_instance_id")
             or arguments.get("background_id")
             or arguments.get("background_query")
-            or request.active_background_id
+            or (
+                request.allow_stored_background
+                and request.active_background_id
+            )
         ):
             arguments["background_query"] = answer
         elif not (
             arguments.get("application_project_id")
             or arguments.get("application_project_query")
-            or request.active_application_project_id
+            or (
+                request.allow_stored_application_project
+                and request.active_application_project_id
+            )
         ):
             arguments["application_project_query"] = answer
         elif not arguments.get("story_titles") and not arguments.get(
@@ -428,10 +552,21 @@ def _pending_plan(request: DomainAgentRequest) -> Optional[AgentPlan]:
         )
 
     if capability == "application_project.create":
-        if not (
+        requested_slot = request.pending_next_field or ""
+        if requested_slot == "background":
+            arguments.pop("background_instance_id", None)
+            arguments["background_query"] = answer
+        elif requested_slot == "school_name":
+            arguments["school_name"] = answer
+        elif requested_slot == "program_name":
+            arguments["program_name"] = answer
+        elif not (
             arguments.get("background_instance_id")
             or arguments.get("background_query")
-            or request.active_background_id
+            or (
+                request.allow_stored_background
+                and request.active_background_id
+            )
         ):
             arguments["background_query"] = answer
         elif not arguments.get("school_name"):
@@ -451,10 +586,25 @@ def _pending_plan(request: DomainAgentRequest) -> Optional[AgentPlan]:
         )
 
     if capability == "story.create":
-        if not (
+        requested_slot = request.pending_next_field or ""
+        if requested_slot == "person":
+            arguments.pop("person_id", None)
+            arguments["person_query"] = answer
+        elif requested_slot == "background":
+            arguments.pop("background_instance_id", None)
+            arguments["background_query"] = answer
+        elif requested_slot == "application_project":
+            arguments.pop("application_project_id", None)
+            arguments["application_project_query"] = answer
+        elif requested_slot == "title":
+            arguments["title"] = answer
+        elif not (
             arguments.get("application_project_id")
             or arguments.get("application_project_query")
-            or request.active_application_project_id
+            or (
+                request.allow_stored_application_project
+                and request.active_application_project_id
+            )
         ):
             arguments["application_project_query"] = answer
         elif not arguments.get("title"):
@@ -463,6 +613,20 @@ def _pending_plan(request: DomainAgentRequest) -> Optional[AgentPlan]:
             return None
         return AgentPlan(
             message="已记录故事信息。",
+            intent="operate",
+            capability=AgentCapabilityCall(
+                name=capability,
+                arguments=arguments,
+            ),
+            needs_confirmation=True,
+        )
+    if (
+        capability == "story.reply"
+        and request.pending_next_field == "answer"
+    ):
+        arguments["answer"] = answer
+        return AgentPlan(
+            message="已记录本轮故事回答。",
             intent="operate",
             capability=AgentCapabilityCall(
                 name=capability,
@@ -584,7 +748,15 @@ def _person(
     ).strip()
     person_id = str(
         args.get("person_id")
-        or ("" if query else request.active_person_id)
+        or (
+            ""
+            if query
+            else (
+                request.active_person_id
+                if request.allow_stored_person
+                else ""
+            )
+        )
         or ""
     )
     if person_id:
@@ -611,7 +783,15 @@ def _background(
     background_id = str(
         args.get("background_instance_id")
         or args.get("background_id")
-        or ("" if query else request.active_background_id)
+        or (
+            ""
+            if query
+            else (
+                request.active_background_id
+                if request.allow_stored_background
+                else ""
+            )
+        )
         or ""
     )
     if background_id:
@@ -648,7 +828,15 @@ def _application_project(
     ).strip()
     project_id = str(
         args.get("application_project_id")
-        or ("" if query else request.active_application_project_id)
+        or (
+            ""
+            if query
+            else (
+                request.active_application_project_id
+                if request.allow_stored_application_project
+                else ""
+            )
+        )
         or ""
     )
     if project_id:
@@ -690,7 +878,15 @@ def _story(
     story_id = str(
         args.get("story_instance_id")
         or args.get("story_id")
-        or ("" if query else request.active_story_id)
+        or (
+            ""
+            if query
+            else (
+                request.active_story_id
+                if request.allow_stored_story
+                else ""
+            )
+        )
         or ""
     )
     if story_id:
@@ -745,7 +941,15 @@ def _project(
     ).strip()
     project_id = str(
         args.get("project_id")
-        or ("" if query else request.active_project_id)
+        or (
+            ""
+            if query
+            else (
+                request.active_project_id
+                if request.allow_stored_project
+                else ""
+            )
+        )
         or ""
     )
     if project_id:
@@ -776,6 +980,8 @@ def _needs_input(
     message: str,
     candidates: Any = None,
     resolved: Optional[Dict[str, Any]] = None,
+    missing_fields: Optional[List[AgentMissingField]] = None,
+    next_field: Optional[str] = None,
 ) -> DomainCommandResponse:
     candidate_text = ""
     if isinstance(candidates, list) and candidates:
@@ -805,11 +1011,31 @@ def _needs_input(
     resolved_payload = {
         key: value
         for key, value in {
-            "person_id": request.active_person_id,
-            "background_id": request.active_background_id,
-            "application_project_id": request.active_application_project_id,
-            "story_id": request.active_story_id,
-            "project_id": request.active_project_id,
+            "person_id": (
+                request.active_person_id
+                if request.allow_stored_person
+                else ""
+            ),
+            "background_id": (
+                request.active_background_id
+                if request.allow_stored_background
+                else ""
+            ),
+            "application_project_id": (
+                request.active_application_project_id
+                if request.allow_stored_application_project
+                else ""
+            ),
+            "story_id": (
+                request.active_story_id
+                if request.allow_stored_story
+                else ""
+            ),
+            "project_id": (
+                request.active_project_id
+                if request.allow_stored_project
+                else ""
+            ),
             **request.pending_resolved,
             **(resolved or {}),
         }.items()
@@ -825,8 +1051,14 @@ def _needs_input(
         capability=plan.capability,
         arguments=plan.capability.arguments if plan.capability else {},
         resolved=resolved_payload,
+        missing_fields=missing_fields or [],
+        next_field=next_field,
         source=request.source,
     )
+
+
+def _domain_missing(key: str, label: str) -> AgentMissingField:
+    return AgentMissingField(key=key, label=label)
 
 
 def _confirmation(
@@ -873,6 +1105,33 @@ def _confirmation(
     )
 
 
+async def _complete_created_essay(
+    domain: DomainStore,
+    owner_id: str,
+    project,
+):
+    if not project.analysis:
+        project = await domain_workflow.analyze_project(
+            owner_id,
+            project.id,
+            store=domain,
+        )
+    if not project.outline:
+        project = await domain_workflow.generate_outline(
+            owner_id,
+            project.id,
+            store=domain,
+        )
+    if not project.draft:
+        project = await domain_workflow.generate_draft(
+            owner_id,
+            project.id,
+            EssayProjectDraftRequest(),
+            store=domain,
+        )
+    return project
+
+
 async def run_domain_command(
     owner_id: str,
     request: DomainAgentRequest,
@@ -901,7 +1160,15 @@ async def run_domain_command(
         if name == "person.create":
             display_name = str(args.get("display_name") or "").strip()
             if not display_name:
-                return _needs_input(request, plan, "请先告诉我新人物叫什么。")
+                return _needs_input(
+                    request,
+                    plan,
+                    "请先告诉我新人物叫什么。",
+                    missing_fields=[
+                        _domain_missing("display_name", "新人物姓名")
+                    ],
+                    next_field="display_name",
+                )
             if not request.confirmed:
                 return _confirmation(request, plan, {})
             created = domain.create_person(owner_id, display_name)
@@ -987,7 +1254,19 @@ async def run_domain_command(
                 return _confirmation(request, plan, resolved)
             raw_operations = args.get("operations") or []
             if not isinstance(raw_operations, list) or not raw_operations:
-                return _needs_input(request, plan, "请说明要修改哪个背景字段。")
+                return _needs_input(
+                    request,
+                    plan,
+                    "请说明要修改哪个背景字段。",
+                    resolved=resolved,
+                    missing_fields=[
+                        _domain_missing(
+                            "operations",
+                            "要修改的背景字段和值",
+                        )
+                    ],
+                    next_field="operations",
+                )
             operations = [
                 ProfilePatchOperation.model_validate(item)
                 for item in raw_operations
@@ -1026,6 +1305,10 @@ async def run_domain_command(
                         "项目官网资料可选，可以留空。"
                     ),
                     candidates,
+                    missing_fields=[
+                        _domain_missing("background", "人物背景")
+                    ],
+                    next_field="background",
                 )
             resolved.update(
                 {
@@ -1050,6 +1333,22 @@ async def run_domain_command(
                         "项目官网资料不是必填项。"
                     ),
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing(
+                            key,
+                            label,
+                        )
+                        for key, label in (
+                            ("school_name", "学校名称"),
+                            ("program_name", "专业项目名称"),
+                        )
+                        if not str(args.get(key) or "").strip()
+                    ],
+                    next_field=(
+                        "school_name"
+                        if not school_name
+                        else "program_name"
+                    ),
                 )
             if not request.confirmed:
                 return _confirmation(request, plan, resolved)
@@ -1129,6 +1428,10 @@ async def run_domain_command(
                     ),
                     candidates,
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("person", "人物")
+                    ],
+                    next_field="person",
                 )
             resolved["person_id"] = person.id
             background, candidates = _background(
@@ -1144,6 +1447,10 @@ async def run_domain_command(
                     ),
                     candidates,
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("background", "人物背景")
+                    ],
+                    next_field="background",
                 )
             resolved.update(
                 {
@@ -1169,6 +1476,13 @@ async def run_domain_command(
                     ),
                     candidates,
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing(
+                            "application_project",
+                            "申请项目",
+                        )
+                    ],
+                    next_field="application_project",
                 )
             resolved["application_project_id"] = application_project.id
             title = str(args.get("title") or "").strip()
@@ -1182,6 +1496,10 @@ async def run_domain_command(
                         "最后请给这段故事起一个名称。"
                     ),
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("title", "故事名称")
+                    ],
+                    next_field="title",
                 )
             if not request.confirmed:
                 return _confirmation(request, plan, resolved)
@@ -1306,6 +1624,10 @@ async def run_domain_command(
                     plan,
                     "请先提供这轮故事回答。",
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("answer", "本轮故事回答")
+                    ],
+                    next_field="answer",
                 )
             if not request.confirmed:
                 return _confirmation(request, plan, resolved)
@@ -1335,6 +1657,64 @@ async def run_domain_command(
             )
 
         if name == "essay_branch.create":
+            existing_project_id = str(
+                args.get("existing_project_id") or ""
+            ).strip()
+            if existing_project_id:
+                branch = domain.get_project(
+                    owner_id,
+                    existing_project_id,
+                )
+                resolved.update(
+                    {
+                        "person_id": branch.person_id,
+                        "background_id": branch.background_instance_id,
+                        "application_project_id": (
+                            branch.application_project_id
+                        ),
+                        "project_id": branch.id,
+                    }
+                )
+                if not request.confirmed:
+                    return _confirmation(request, plan, resolved)
+                try:
+                    branch = await _complete_created_essay(
+                        domain,
+                        owner_id,
+                        branch,
+                    )
+                except (AppError, ValueError) as exc:
+                    return _needs_input(
+                        request,
+                        plan,
+                        (
+                            "文书已经创建，但后续生成没有全部完成。"
+                            f"原因：{getattr(exc, 'message', str(exc))}。"
+                            "请说“继续”，我会从当前未完成阶段恢复，不会重复创建。"
+                        ),
+                        resolved=resolved,
+                        missing_fields=[
+                            _domain_missing(
+                                "resume_generation",
+                                "继续未完成的文书生成",
+                            )
+                        ],
+                        next_field="resume_generation",
+                    )
+                return DomainCommandResponse(
+                    transcript=request.transcript,
+                    message=(
+                        "已从当前未完成阶段继续生成，英文草稿已就绪。"
+                        "可以继续审核或修改。"
+                    ),
+                    intent=plan.intent,
+                    status="executed",
+                    capability=call,
+                    arguments=args,
+                    resolved=resolved,
+                    result={"project": branch.model_dump(mode="json")},
+                    source=request.source,
+                )
             background, candidates = _background(
                 domain,
                 owner_id,
@@ -1352,6 +1732,10 @@ async def run_domain_command(
                     ),
                     candidates,
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("background", "人物背景")
+                    ],
+                    next_field="background",
                 )
             resolved.update(
                 {
@@ -1378,6 +1762,13 @@ async def run_domain_command(
                     ),
                     candidates,
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing(
+                            "application_project",
+                            "申请项目",
+                        )
+                    ],
+                    next_field="application_project",
                 )
             resolved["application_project_id"] = application_project.id
             story_titles = args.get("story_titles") or []
@@ -1396,6 +1787,13 @@ async def run_domain_command(
                         f"故事“{title}”无法唯一匹配项目链路。",
                         [item.model_dump(mode="json") for item in matches],
                         resolved=resolved,
+                        missing_fields=[
+                            _domain_missing(
+                                "story",
+                                "唯一匹配的已完成故事",
+                            )
+                        ],
+                        next_field="story",
                     )
                 if matches[0].status != "ready":
                     return _needs_input(
@@ -1412,6 +1810,13 @@ async def run_domain_command(
                             application_project.id,
                         ),
                         resolved=resolved,
+                        missing_fields=[
+                            _domain_missing(
+                                "story",
+                                "已完成故事",
+                            )
+                        ],
+                        next_field="story",
                     )
                 story_ids.append(matches[0].id)
             if not story_ids:
@@ -1430,6 +1835,10 @@ async def run_domain_command(
                         application_project.id,
                     ),
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("story", "已完成故事")
+                    ],
+                    next_field="story",
                 )
             resolved["story_ids"] = story_ids
             if len(story_ids) == 1:
@@ -1446,6 +1855,10 @@ async def run_domain_command(
                         "之后只需要再提供文书题目。"
                     ),
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("essay_type", "PS 或 ML")
+                    ],
+                    next_field="essay_type",
                 )
             prompt_text = str(args.get("prompt_text") or "").strip()
             if len(prompt_text) < 10:
@@ -1458,6 +1871,44 @@ async def run_domain_command(
                         "字数默认 800，项目官网资料可选，均无需额外补充。"
                     ),
                     resolved=resolved,
+                    missing_fields=[
+                        _domain_missing("prompt_text", "文书题目")
+                    ],
+                    next_field="prompt_text",
+                )
+            existing_branch = next(
+                (
+                    project
+                    for project in domain.list_projects(
+                        owner_id,
+                        background_id=background.id,
+                    )
+                    if project.application_project_id
+                    == application_project.id
+                    and project.program.essay_type == essay_type
+                    and project.status != "archived"
+                ),
+                None,
+            )
+            if existing_branch is not None:
+                args["existing_project_id"] = existing_branch.id
+                resolved["project_id"] = existing_branch.id
+                return _needs_input(
+                    request,
+                    plan,
+                    (
+                        f"当前申请项目已经有一个 {essay_type} 文书。"
+                        "同一项目每种类型只保留一个分支。"
+                        "你可以说“打开现有”，或说“改成 ML”创建另一种文书。"
+                    ),
+                    resolved=resolved,
+                    missing_fields=[
+                        _domain_missing(
+                            "existing_branch_choice",
+                            "打开现有文书或切换文书类型",
+                        )
+                    ],
+                    next_field="existing_branch_choice",
                 )
             if not request.confirmed:
                 return _confirmation(request, plan, resolved)
@@ -1476,22 +1927,31 @@ async def run_domain_command(
             resolved["project_id"] = branch.id
             generated = bool(args.get("generate_after_create"))
             if generated:
-                branch = await domain_workflow.analyze_project(
-                    owner_id,
-                    branch.id,
-                    store=domain,
-                )
-                branch = await domain_workflow.generate_outline(
-                    owner_id,
-                    branch.id,
-                    store=domain,
-                )
-                branch = await domain_workflow.generate_draft(
-                    owner_id,
-                    branch.id,
-                    EssayProjectDraftRequest(),
-                    store=domain,
-                )
+                try:
+                    branch = await _complete_created_essay(
+                        domain,
+                        owner_id,
+                        branch,
+                    )
+                except (AppError, ValueError) as exc:
+                    args["existing_project_id"] = branch.id
+                    return _needs_input(
+                        request,
+                        plan,
+                        (
+                            "文书已经创建，但后续生成没有全部完成。"
+                            f"原因：{getattr(exc, 'message', str(exc))}。"
+                            "请说“继续”，我会从当前未完成阶段恢复，不会重复创建。"
+                        ),
+                        resolved=resolved,
+                        missing_fields=[
+                            _domain_missing(
+                                "resume_generation",
+                                "继续未完成的文书生成",
+                            )
+                        ],
+                        next_field="resume_generation",
+                    )
             return DomainCommandResponse(
                 transcript=request.transcript,
                 message=(
@@ -1589,6 +2049,18 @@ async def run_domain_command(
             if project is None:
                 return _needs_input(request, plan, "请指定要操作的文书项目。", candidates)
             resolved["project_id"] = project.id
+            if name == "project.open":
+                return DomainCommandResponse(
+                    transcript=request.transcript,
+                    message="已打开现有文书，可以继续生成、审核或修改。",
+                    intent=plan.intent,
+                    status="executed",
+                    capability=call,
+                    arguments=args,
+                    resolved=resolved,
+                    result={"project": project.model_dump(mode="json")},
+                    source=request.source,
+                )
             if not request.confirmed:
                 return _confirmation(request, plan, resolved)
             if name == "project.patch":

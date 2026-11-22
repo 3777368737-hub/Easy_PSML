@@ -414,7 +414,10 @@ def canonical_workflow_snapshot(
     db = store or get_store()
     from app.services.domain_store import DomainStore
 
-    workspace = DomainStore(db.path).workspace_snapshot(owner_id)
+    workspace = DomainStore(db.path).workspace_snapshot(
+        owner_id,
+        sync_legacy=False,
+    )
     profile = (
         db.get_profile(context.ids.profile_id, owner_id)
         if context.ids.profile_id
