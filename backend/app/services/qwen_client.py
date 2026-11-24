@@ -71,6 +71,48 @@ class QwenClient:
         if not transcript:
             raise ModelOutputError("Qwen returned an empty speech transcript")
 
+    async def ocr_image(self, image: bytes, media_type: str = "image/png") -> str:
+        if not image:
+            raise ModelOutputError("Qwen OCR received an empty image")
+        encoded = base64.b64encode(image).decode("ascii")
+        data_uri = f"data:{media_type};base64,{encoded}"
+        data = await self._post(
+            "/chat/completions",
+            {
+                "model": self.settings.qwen_ocr_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_uri},
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Transcribe all text in this document image. "
+                                    "Return plain text only, preserving line breaks. "
+                                    "Do not add explanations or Markdown fences."
+                                ),
+                            },
+                        ],
+                    }
+                ],
+                "temperature": 0,
+            },
+        )
+        try:
+            message = data["choices"][0]["message"]
+            text = self._normalize_content(message.get("content")).strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelOutputError(
+                "Qwen OCR returned an unexpected response shape"
+            ) from exc
+        if not text:
+            raise ModelOutputError("Qwen OCR returned empty text")
+        return text
+
     def _asr_payload(
         self, audio: bytes, media_type: str, *, stream: bool
     ) -> Dict[str, Any]:

@@ -631,12 +631,22 @@ API Key 只负责身份认证，不代表账号已经开通该模型。请到百
 首次调用可能经过模型排队。前端会持续显示等待条。默认超时为 120 秒，可通过
 `DOCUMENT_EXPORT_TIMEOUT_SECONDS` 调整。
 
-### 4. PDF 中文乱码
+### 4. 导出的 PDF 中文乱码
 
 当前 PDF 使用 ReportLab 内置的 `STSong-Light` CID 字体。请确认
 `reportlab` 已通过 `requirements.txt` 安装，并重新启动后端。
 
-### 5. 语音没有响应
+### 5. 上传简历 PDF 后无法回填
+
+简历解析分为两步：先提取 PDF 文本，再由 DeepSeek 把文本整理成表单 JSON。
+DeepSeek 不直接读取 PDF，因此扫描件或文本层损坏的 PDF 需要先做 OCR。
+
+当前后端会在普通文本提取为空或质量不合格时，使用 PyMuPDF 渲染页面并调用
+`QWEN_OCR_MODEL`（默认 `qwen3.5-ocr`），随后仍由 DeepSeek 完成结构化抽取。
+确认 `backend/.env` 中已配置 `QWEN_API_KEY`；扫描版简历默认最多识别 10 页，
+可通过 `MAX_RESUME_OCR_PAGES` 调整。
+
+### 6. 语音没有响应
 
 - 检查浏览器麦克风权限
 - 使用 `localhost` 或 `127.0.0.1` 访问
@@ -644,7 +654,7 @@ API Key 只负责身份认证，不代表账号已经开通该模型。请到百
 - 检查 `/api/agent/voice/realtime` WebSocket 是否可连接
 - 查看后端日志中的 ASR 错误
 
-### 6. 后端返回 429
+### 7. 后端返回 429
 
 默认每个匿名 owner 在 10 分钟内最多发起 40 次模型请求。可调整
 `MODEL_CALLS_PER_WINDOW`，但不建议在生产环境取消限制。

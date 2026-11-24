@@ -142,7 +142,7 @@ function Ensure-BackendEnvironment {
         }
     }
 
-    & $backendPython -c "import fastapi, uvicorn, httpx, docx, pypdf, reportlab, multipart" 2>$null
+    & $backendPython -c "import fastapi, uvicorn, httpx, docx, pypdf, pymupdf, reportlab, multipart" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Installing backend dependencies..." -ForegroundColor Cyan
         & $backendPython -m pip install -r (Join-Path $backendDir "requirements.txt") --disable-pip-version-check

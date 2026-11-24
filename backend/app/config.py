@@ -66,6 +66,9 @@ class Settings(BaseModel):
     qwen_asr_vad_model: str = Field(
         default=os.getenv("QWEN_ASR_VAD_MODEL", "near_meeting_16k")
     )
+    qwen_ocr_model: str = Field(
+        default=os.getenv("QWEN_OCR_MODEL", "qwen3.5-ocr")
+    )
     qwen_asr_max_sentence_silence_ms: int = Field(
         default=int(os.getenv("QWEN_ASR_MAX_SENTENCE_SILENCE_MS", "1200")),
         ge=200,
@@ -158,6 +161,11 @@ class Settings(BaseModel):
         default=int(os.getenv("MAX_RESUME_PAGES", "30")),
         ge=1,
         le=200,
+    )
+    max_resume_ocr_pages: int = Field(
+        default=int(os.getenv("MAX_RESUME_OCR_PAGES", "10")),
+        ge=1,
+        le=30,
     )
     model_calls_per_window: int = Field(
         default=int(os.getenv("MODEL_CALLS_PER_WINDOW", "40")),

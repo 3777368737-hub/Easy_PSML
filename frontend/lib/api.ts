@@ -274,8 +274,13 @@ export function readableError(error: unknown, fallback = '操作失败'): string
     network_error: error.message,
     model_not_configured: '后端尚未配置 DEEPSEEK_API_KEY，请检查 backend/.env。',
     model_auth_failed: '模型服务鉴权失败，请检查 API Key 是否正确或是否过期。',
-    model_output_invalid: '模型返回内容不完整，系统已自动重试。请缩短项目要求后再次尝试。',
+    model_output_invalid: '模型返回内容不完整，系统已自动重试。请稍后再次尝试或缩短输入内容。',
     model_service_unavailable: '模型服务暂时不可用，请稍后重试。',
+    resume_text_empty: '文件中没有可读取的文本，OCR 也未返回可用内容。',
+    resume_text_unreadable: '文件中的文字无法可靠识别，请上传原始 DOCX、TXT 或更清晰的 PDF。',
+    resume_ocr_too_long: '扫描版简历页数过多，当前最多识别 10 页。',
+    resume_parse_failed: '文件结构无法解析，请确认文件未损坏且不是仅改了扩展名。',
+    encrypted_resume: '暂不支持有密码保护的 PDF，请解除密码后重新上传。',
     qwen_not_configured:
       '后端尚未配置 QWEN_API_KEY，请在 backend/.env 中填写 DashScope API Key。',
     qwen_auth_failed:

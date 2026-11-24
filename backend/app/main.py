@@ -23,7 +23,6 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from app.config import get_settings
@@ -87,7 +86,7 @@ from app.services.agent import (
     transcribe_audio_stream,
 )
 from app.services.agent_capabilities import validate_capability
-from app.services.resume_parser import extract_resume_text
+from app.services.resume_parser import extract_resume_text_from_upload
 from app.services.realtime_asr import run_realtime_asr_session
 from app.services.batch import create_batch, retry_batch, start_worker, stop_worker
 from app.services.domain_store import get_domain_store
@@ -990,8 +989,7 @@ async def profile_extract(
                 status_code=413,
                 code="resume_too_large",
             )
-        resume_text = await run_in_threadpool(
-            extract_resume_text,
+        resume_text = await extract_resume_text_from_upload(
             filename,
             uploaded_content,
         )
